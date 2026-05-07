@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cdfi-benchmark"
+version = "0.1.0"
+description = "CDFI and MDI peer benchmarking tool using FDIC call report data — NIM, efficiency ratio, ROAA, CET1, and more"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "pandas>=1.4.0",
+    "numpy>=1.21.0",
+    "requests>=2.27.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Jaypatel1511/cdfi-benchmark"
