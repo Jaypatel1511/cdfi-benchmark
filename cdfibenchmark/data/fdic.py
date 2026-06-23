@@ -8,6 +8,7 @@ from typing import Optional
 from cdfibenchmark.data.schema import (
     InstitutionProfile, FDIC_API_BASE, FDIC_FIELDS
 )
+from cdfibenchmark.exceptions import FDICAPIError, FDICResponseError
 
 TIMEOUT = 30
 
@@ -15,6 +16,11 @@ TIMEOUT = 30
 def get_institution(cert: int) -> Optional[dict]:
     """
     Fetch institution profile by FDIC certificate number.
+
+    Returns the raw record dict, or None when no institution matches the cert
+    (a legitimate "no such institution" answer). Raises FDICAPIError on a
+    transport/decode failure and FDICResponseError if the response shape is
+    unexpected.
     """
     url = f"{FDIC_API_BASE}/institutions"
     params = {
@@ -23,16 +29,23 @@ def get_institution(cert: int) -> Optional[dict]:
         "limit": 1,
         "format": "json",
     }
+
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
         r.raise_for_status()
-        data = r.json()
-        institutions = data.get("data", [])
-        if institutions:
-            return institutions[0].get("data", {})
-    except Exception as e:
-        print(f"FDIC API error: {e}")
-    return None
+        payload = r.json()
+    except (requests.exceptions.RequestException, ValueError) as e:
+        raise FDICAPIError(f"get_institution failed for CERT {cert}: {e}") from e
+
+    try:
+        institutions = payload.get("data", [])
+        if not institutions:
+            return None
+        return institutions[0].get("data", {})
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        raise FDICResponseError(
+            f"unexpected FDIC response shape for CERT {cert}: {e}"
+        ) from e
 
 
 def search_institutions(
@@ -56,9 +69,10 @@ def search_institutions(
     if max_assets:
         filters.append(f"ASSET:[* TO {max_assets}]")
 
+    filter_str = " AND ".join(filters)
     url = f"{FDIC_API_BASE}/institutions"
     params = {
-        "filters": " AND ".join(filters),
+        "filters": filter_str,
         "fields": "CERT,INSTNAME,CITY,STALP,ASSET",
         "limit": limit,
         "sort_by": "ASSET",
@@ -69,17 +83,25 @@ def search_institutions(
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
         r.raise_for_status()
-        data = r.json()
-        rows = [item.get("data", {}) for item in data.get("data", [])]
-        if rows:
-            df = pd.DataFrame(rows)
-            if "ASSET" in df.columns:
-                df["ASSET_MM"] = df["ASSET"] / 1_000
-            return df
-    except Exception as e:
-        print(f"FDIC API error: {e}")
+        payload = r.json()
+    except (requests.exceptions.RequestException, ValueError) as e:
+        raise FDICAPIError(
+            f"search_institutions failed for filters [{filter_str}]: {e}"
+        ) from e
 
-    return pd.DataFrame()
+    try:
+        records = payload.get("data", [])
+        if not records:
+            return pd.DataFrame()
+        rows = [item.get("data", {}) for item in records]
+        df = pd.DataFrame(rows)
+        if "ASSET" in df.columns:
+            df["ASSET_MM"] = df["ASSET"] / 1_000
+        return df
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        raise FDICResponseError(
+            f"unexpected FDIC response shape for filters [{filter_str}]: {e}"
+        ) from e
 
 
 def get_financials(
@@ -122,19 +144,20 @@ def get_financials(
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
         r.raise_for_status()
-        data = r.json()
-        records = data.get("data", [])
+        payload = r.json()
+    except (requests.exceptions.RequestException, ValueError) as e:
+        raise FDICAPIError(f"get_financials failed for CERT {cert}: {e}") from e
 
+    try:
+        records = payload.get("data", [])
         if not records:
-            print(f"No financial data found for CERT {cert}")
             return None
-
         row = records[0].get("data", {})
         return _parse_institution(row)
-
-    except Exception as e:
-        print(f"FDIC API error fetching financials for CERT {cert}: {e}")
-        return None
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        raise FDICResponseError(
+            f"unexpected FDIC response shape for CERT {cert}: {e}"
+        ) from e
 
 
 def get_peer_financials(
@@ -175,8 +198,9 @@ def get_peer_financials(
     if report_date:
         filters.append(f"REPDTE:{report_date}")
 
+    filter_str = " AND ".join(filters)
     params = {
-        "filters": " AND ".join(filters),
+        "filters": filter_str,
         "fields": ",".join(fields),
         "limit": limit,
         "sort_by": "ASSET",
@@ -187,13 +211,22 @@ def get_peer_financials(
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
         r.raise_for_status()
-        data = r.json()
-        records = data.get("data", [])
+        payload = r.json()
+    except (requests.exceptions.RequestException, ValueError) as e:
+        raise FDICAPIError(
+            f"get_peer_financials failed for filters [{filter_str}]: {e}"
+        ) from e
+
+    try:
+        records = payload.get("data", [])
+        if not records:
+            return []
         return [_parse_institution(item.get("data", {}))
                 for item in records if item.get("data")]
-    except Exception as e:
-        print(f"FDIC API error fetching peer data: {e}")
-        return []
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        raise FDICResponseError(
+            f"unexpected FDIC response shape for filters [{filter_str}]: {e}"
+        ) from e
 
 
 def _parse_institution(row: dict) -> InstitutionProfile:

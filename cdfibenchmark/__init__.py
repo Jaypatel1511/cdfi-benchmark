@@ -1,3 +1,8 @@
+from importlib.metadata import version, PackageNotFoundError
+
+from cdfibenchmark.exceptions import (
+    CDFIBenchmarkError, FDICAPIError, FDICResponseError,
+)
 from cdfibenchmark.data.schema import (
     InstitutionProfile, BenchmarkResult,
     BENCHMARKS, ASSET_BUCKETS,
@@ -16,8 +21,13 @@ from cdfibenchmark.report.generator import (
     generate_report, summary_table,
 )
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("cdfi-benchmark")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
+
 __all__ = [
+    "CDFIBenchmarkError", "FDICAPIError", "FDICResponseError",
     "InstitutionProfile", "BenchmarkResult",
     "get_institution", "get_financials",
     "search_institutions", "get_peer_financials",
