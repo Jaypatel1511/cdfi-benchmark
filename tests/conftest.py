@@ -30,3 +30,31 @@ def sample_institution():
 @pytest.fixture
 def sample_peers(sample_institution):
     return build_sample_peer_group(sample_institution)
+
+
+@pytest.fixture
+def nan_cored_institution():
+    """An institution whose core financials the FDIC response omitted.
+
+    Every core field is NaN (exactly what _parse_institution produces for an
+    all-core-absent record) and optional ratios are None. Used to verify the
+    downstream consumers treat an unknown-value institution as not-available
+    rather than fabricating a metric, bucket, grade, or rank.
+    """
+    nan = float("nan")
+    return InstitutionProfile(
+        cert=99999,
+        name="Sparse Bank",
+        city="Nowhere",
+        state="CA",
+        report_date="20241231",
+        total_assets=nan,
+        total_deposits=nan,
+        net_loans=nan,
+        net_income=nan,
+        interest_income=nan,
+        interest_expense=nan,
+        non_interest_income=nan,
+        non_interest_expense=nan,
+        total_equity=nan,
+    )

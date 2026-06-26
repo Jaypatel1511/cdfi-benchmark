@@ -108,11 +108,50 @@ since 1934.
 
 ---
 
+## Error handling
+
+The data layer **fails loud**. In an early-warning / anomaly-detection pipeline a
+silently-empty or fabricated result reads as "nothing anomalous" and masks the real
+problem, so the FDIC fetchers raise typed errors instead of swallowing failures:
+
+- **`FDICAPIError`** — a *transport* problem: the request never produced a usable
+  response body. Network/timeout errors, non-2xx HTTP status, and JSON decode
+  failures all raise this.
+- **`FDICResponseError`** — the response *decoded* but its structure is wrong, either
+  at the envelope level (the top-level `data` key absent, `null`, or not a list) or at
+  the *field* level inside a record: a record missing its `CERT` identity, a `CERT`
+  that isn't int-coercible, or any core/optional financial field that is **present but
+  not numeric**. A bad record is never coerced into a phantom `cert=0` bank or a
+  fabricated `0.0`.
+- **Legitimately empty is not an error.** A successful request that returns zero rows
+  (`{"data": []}`) returns the empty value for that fetcher — `None`,
+  an empty `DataFrame`, or `[]` — and does **not** raise.
+
+Missing-but-not-garbage fields inside an otherwise valid record are kept, not dropped:
+an absent **core** financial (e.g. `ASSET`) becomes `NaN` (unknown — it propagates to
+any metric computed from it rather than fabricating `0.0`), and an absent **optional**
+ratio (e.g. `RBCT1J`) becomes `None`. A real present `0.0` is preserved as `0.0`.
+
+Both error types subclass `CDFIBenchmarkError`, so callers can catch the contract
+broadly or distinguish "the API is unreachable" (`FDICAPIError`) from "the API changed
+its shape" (`FDICResponseError`):
+
+    from cdfibenchmark import FDICAPIError, FDICResponseError
+
+    try:
+        institution = get_financials(cert=57542)
+    except FDICAPIError:
+        ...   # transport/HTTP/decode failure — retry or alert
+    except FDICResponseError:
+        ...   # wrong-shape or present-but-garbage field — contract problem
+
+---
+
 ## Running Tests
 
     PYTHONPATH=. pytest tests/ -v
 
-27 tests across all modules.
+79 tests across all modules.
 
 ---
 

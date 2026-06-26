@@ -89,7 +89,9 @@ def rank_institution(
     peer_df = compute_peer_metrics(peers)
     inst_value = institution.metrics_dict().get(metric)
 
-    if inst_value is None or metric not in peer_df.columns:
+    # A missing (None) or unknown (NaN) metric can't be ranked — list.index on
+    # NaN is meaningless. Treat it as not-available, like the absent case.
+    if inst_value is None or pd.isna(inst_value) or metric not in peer_df.columns:
         return {"rank": None, "percentile": None, "peer_count": len(peers)}
 
     peer_values = peer_df[metric].dropna().tolist()

@@ -5,12 +5,32 @@ Free public API — no authentication required.
 import requests
 import pandas as pd
 from typing import Optional
-from cdfibenchmark.data.schema import (
-    InstitutionProfile, FDIC_API_BASE, FDIC_FIELDS
-)
+from cdfibenchmark.data.schema import InstitutionProfile, FDIC_API_BASE
 from cdfibenchmark.exceptions import FDICAPIError, FDICResponseError
 
 TIMEOUT = 30
+
+
+def _extract_records(payload, ctx: str) -> list:
+    """Enforce the top-level "data" shape contract for every fetcher.
+
+    The "data" key absent, null, or not a list is a wrong-shape response →
+    FDICResponseError (names ``ctx``). A present empty list is the legitimate
+    "zero rows" answer and is returned as-is for the caller to map to its own
+    empty value (None / empty DataFrame / []).
+    """
+    if not isinstance(payload, dict):
+        raise FDICResponseError(
+            f"FDIC response for {ctx} was {type(payload).__name__}, not a JSON object"
+        )
+    if "data" not in payload:
+        raise FDICResponseError(f"FDIC response for {ctx} is missing the 'data' key")
+    data = payload["data"]
+    if not isinstance(data, list):
+        raise FDICResponseError(
+            f"FDIC response 'data' for {ctx} was {type(data).__name__}, not a list"
+        )
+    return data
 
 
 def get_institution(cert: int) -> Optional[dict]:
@@ -37,10 +57,10 @@ def get_institution(cert: int) -> Optional[dict]:
     except (requests.exceptions.RequestException, ValueError) as e:
         raise FDICAPIError(f"get_institution failed for CERT {cert}: {e}") from e
 
+    institutions = _extract_records(payload, f"CERT {cert}")
+    if not institutions:
+        return None
     try:
-        institutions = payload.get("data", [])
-        if not institutions:
-            return None
         return institutions[0].get("data", {})
     except (AttributeError, KeyError, TypeError, ValueError) as e:
         raise FDICResponseError(
@@ -89,10 +109,10 @@ def search_institutions(
             f"search_institutions failed for filters [{filter_str}]: {e}"
         ) from e
 
+    records = _extract_records(payload, f"filters [{filter_str}]")
+    if not records:
+        return pd.DataFrame()
     try:
-        records = payload.get("data", [])
-        if not records:
-            return pd.DataFrame()
         rows = [item.get("data", {}) for item in records]
         df = pd.DataFrame(rows)
         if "ASSET" in df.columns:
@@ -148,16 +168,16 @@ def get_financials(
     except (requests.exceptions.RequestException, ValueError) as e:
         raise FDICAPIError(f"get_financials failed for CERT {cert}: {e}") from e
 
+    records = _extract_records(payload, f"CERT {cert}")
+    if not records:
+        return None
     try:
-        records = payload.get("data", [])
-        if not records:
-            return None
         row = records[0].get("data", {})
-        return _parse_institution(row)
     except (AttributeError, KeyError, TypeError, ValueError) as e:
         raise FDICResponseError(
             f"unexpected FDIC response shape for CERT {cert}: {e}"
         ) from e
+    return _parse_institution(row)
 
 
 def get_peer_financials(
@@ -217,44 +237,82 @@ def get_peer_financials(
             f"get_peer_financials failed for filters [{filter_str}]: {e}"
         ) from e
 
+    records = _extract_records(payload, f"filters [{filter_str}]")
+    if not records:
+        return []
+    # No silent-skip guard: every record is parsed. A malformed record in the
+    # batch signals a contract problem and raises (fail loud for the batch);
+    # legitimately-sparse records (absent core → NaN, absent optional → None)
+    # are kept, not dropped.
     try:
-        records = payload.get("data", [])
-        if not records:
-            return []
-        return [_parse_institution(item.get("data", {}))
-                for item in records if item.get("data")]
+        return [_parse_institution(item.get("data")) for item in records]
     except (AttributeError, KeyError, TypeError, ValueError) as e:
         raise FDICResponseError(
             f"unexpected FDIC response shape for filters [{filter_str}]: {e}"
         ) from e
 
 
+def _coerce_float(row: dict, key: str, *, absent):
+    """Coerce ``row[key]`` to float under the field-level empty-vs-error rule.
+
+    absent / null  → ``absent`` (NaN for core financials, None for optional
+                     ratios) — NEVER a fabricated 0.0.
+    present & numeric → the float value, so a real present 0.0 is preserved.
+    present & non-numeric → FDICResponseError naming the offending field.
+    """
+    if key not in row or row[key] is None:
+        return absent
+    val = row[key]
+    try:
+        return float(val)
+    except (TypeError, ValueError) as e:
+        raise FDICResponseError(
+            f"FDIC field {key} is present but not float-coercible: {val!r}"
+        ) from e
+
+
 def _parse_institution(row: dict) -> InstitutionProfile:
-    """Parse a raw FDIC API response row into an InstitutionProfile."""
-    def safe_float(key, default=0.0):
-        val = row.get(key)
-        try:
-            return float(val) if val is not None else default
-        except (TypeError, ValueError):
-            return default
+    """Parse a raw FDIC financials row into an InstitutionProfile, failing loud.
+
+    Identity (CERT) absent/null/non-int-coercible → FDICResponseError — a
+    record with no usable identity must never become a phantom cert=0 bank.
+    Core financials absent/null → NaN (unknown, never a fabricated 0.0);
+    present-but-garbage → FDICResponseError. Optional ratios absent/null →
+    None; present-but-garbage → FDICResponseError. String fields are cosmetic
+    and default to "" / "Unknown".
+    """
+    if not isinstance(row, dict):
+        raise FDICResponseError(
+            f"FDIC record is not an object (got {type(row).__name__}): {row!r}"
+        )
+
+    cert_raw = row.get("CERT")
+    if cert_raw is None:
+        raise FDICResponseError("FDIC record is missing its identity field CERT")
+    try:
+        cert = int(cert_raw)
+    except (TypeError, ValueError) as e:
+        raise FDICResponseError(
+            f"FDIC field CERT is present but not int-coercible: {cert_raw!r}"
+        ) from e
 
     return InstitutionProfile(
-        cert=int(row.get("CERT", 0)),
+        cert=cert,
         name=str(row.get("INSTNAME", "Unknown")),
         city=str(row.get("CITY", "")),
         state=str(row.get("STALP", "")),
         report_date=str(row.get("REPDTE", "")),
-        total_assets=safe_float("ASSET"),
-        total_deposits=safe_float("DEP"),
-        net_loans=safe_float("LNLSNET"),
-        net_income=safe_float("NETINC"),
-        interest_income=safe_float("INTINC"),
-        interest_expense=safe_float("EINTEXP"),
-        non_interest_income=safe_float("NONII"),
-        non_interest_expense=safe_float("NONIX"),
-        total_equity=safe_float("EQ"),
-        tier1_ratio=safe_float("RBCT1J") or None,
-        gross_loans=safe_float("LNLSGR") or None,
-        non_current_loans=safe_float("NCLNLS") or None,
-        loan_loss_allowance=safe_float("LNATRES") or None,
+        total_assets=_coerce_float(row, "ASSET", absent=float("nan")),
+        total_deposits=_coerce_float(row, "DEP", absent=float("nan")),
+        net_loans=_coerce_float(row, "LNLSNET", absent=float("nan")),
+        net_income=_coerce_float(row, "NETINC", absent=float("nan")),
+        interest_income=_coerce_float(row, "INTINC", absent=float("nan")),
+        interest_expense=_coerce_float(row, "EINTEXP", absent=float("nan")),
+        non_interest_income=_coerce_float(row, "NONII", absent=float("nan")),
+        non_interest_expense=_coerce_float(row, "NONIX", absent=float("nan")),
+        total_equity=_coerce_float(row, "EQ", absent=float("nan")),
+        tier1_ratio=_coerce_float(row, "RBCT1J", absent=None),
+        gross_loans=_coerce_float(row, "LNLSGR", absent=None),
+        non_current_loans=_coerce_float(row, "NCLNLS", absent=None),
+        loan_loss_allowance=_coerce_float(row, "LNATRES", absent=None),
     )

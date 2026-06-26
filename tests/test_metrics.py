@@ -48,3 +48,28 @@ def test_rank_institution(sample_institution, sample_peers):
     assert "rank" in result
     assert "percentile" in result
     assert result["peer_count"] > 0
+
+
+# ── Downstream NaN handling: a NaN-cored institution must be reported as ──────
+# not-available by every consumer, never as a fabricated metric/bucket/grade.
+def test_nan_cored_asset_bucket_is_unknown(nan_cored_institution):
+    assert nan_cored_institution.asset_bucket == "unknown"
+
+
+def test_nan_cored_benchmark_status_is_na(nan_cored_institution, sample_peers):
+    results = benchmark_institution(nan_cored_institution, sample_peers)
+    assert results  # all metrics present
+    for r in results:
+        assert r.status == "N/A", f"{r.metric} graded {r.status}, expected N/A"
+
+
+def test_nan_cored_vs_median_is_none(nan_cored_institution, sample_peers):
+    results = benchmark_institution(nan_cored_institution, sample_peers)
+    for r in results:
+        assert r.vs_median is None, f"{r.metric} vs_median was {r.vs_median!r}"
+
+
+def test_nan_cored_rank_is_none(nan_cored_institution, sample_peers):
+    result = rank_institution(nan_cored_institution, sample_peers, "roaa")
+    assert result["rank"] is None
+    assert result["percentile"] is None

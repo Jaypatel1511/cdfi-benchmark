@@ -6,6 +6,16 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _is_missing(x) -> bool:
+    """True for an absent/unknown value — None or NaN — but NOT a real 0.
+
+    Core financials that the FDIC response omitted arrive as NaN (never a
+    fabricated 0.0); this distinguishes "we don't know" from "it is zero" so
+    metrics propagate the unknown instead of inventing a verdict.
+    """
+    return x is None or (isinstance(x, float) and x != x)  # NaN != NaN
+
+
 # ── FDIC BankFind Suite API ───────────────────────────────────────────────────
 FDIC_API_BASE = "https://banks.data.fdic.gov/api"
 
@@ -94,15 +104,24 @@ class InstitutionProfile:
 
     @property
     def asset_bucket(self) -> str:
+        # Unknown assets must not be silently labelled the largest bucket.
+        if _is_missing(self.total_assets):
+            return "unknown"
         assets = self.total_assets
         for bucket, (low, high) in ASSET_BUCKETS.items():
             if low <= assets < high:
                 return bucket
         return "mega"
 
+    # Metric properties divide by a core financial. When that core is missing
+    # (absent in the FDIC response → NaN) the metric is unknown, so it
+    # propagates NaN rather than inventing a number or collapsing to None. A
+    # real denominator of 0 stays None (genuinely undefined, no ZeroDivision).
     @property
     def nim(self) -> Optional[float]:
-        if self.total_assets and self.total_assets > 0:
+        if _is_missing(self.total_assets):
+            return float("nan")
+        if self.total_assets > 0:
             return ((self.interest_income - self.interest_expense)
                     / self.total_assets * 100)
         return None
@@ -110,25 +129,33 @@ class InstitutionProfile:
     @property
     def efficiency_ratio(self) -> Optional[float]:
         revenue = self.interest_income + self.non_interest_income
-        if revenue and revenue > 0:
+        if _is_missing(revenue):
+            return float("nan")
+        if revenue > 0:
             return (self.non_interest_expense / revenue) * 100
         return None
 
     @property
     def roaa(self) -> Optional[float]:
-        if self.total_assets and self.total_assets > 0:
+        if _is_missing(self.total_assets):
+            return float("nan")
+        if self.total_assets > 0:
             return (self.net_income / self.total_assets) * 100
         return None
 
     @property
     def roae(self) -> Optional[float]:
-        if self.total_equity and self.total_equity > 0:
+        if _is_missing(self.total_equity):
+            return float("nan")
+        if self.total_equity > 0:
             return (self.net_income / self.total_equity) * 100
         return None
 
     @property
     def loans_to_deposits(self) -> Optional[float]:
-        if self.total_deposits and self.total_deposits > 0:
+        if _is_missing(self.total_deposits):
+            return float("nan")
+        if self.total_deposits > 0:
             return (self.net_loans / self.total_deposits) * 100
         return None
 
@@ -173,13 +200,14 @@ class BenchmarkResult:
 
     @property
     def vs_median(self) -> Optional[float]:
-        if self.institution_value and self.peer_median:
-            return self.institution_value - self.peer_median
-        return None
+        if _is_missing(self.institution_value) or self.peer_median is None:
+            return None
+        return self.institution_value - self.peer_median
 
     @property
     def status(self) -> str:
-        if self.institution_value is None:
+        # A missing (None) or unknown (NaN) value is "N/A", never graded WEAK.
+        if _is_missing(self.institution_value):
             return "N/A"
         benchmark = BENCHMARKS.get(self.metric, {})
         good = benchmark.get("good")
