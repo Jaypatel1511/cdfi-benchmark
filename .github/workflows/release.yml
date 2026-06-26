@@ -1,0 +1,133 @@
+name: Release
+
+# Release / publish pipeline. Triggered ONLY by pushing a version tag (v*).
+# Four jobs gated in order: verify-version -> build -> test-wheel -> publish.
+# Publishing is OIDC Trusted Publisher only (no API token), and ONLY the publish
+# job is granted id-token: write.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Default least privilege for every job. The publish job overrides this to add
+# the single elevated scope it needs (id-token: write); no other job is elevated.
+permissions:
+  contents: read
+
+jobs:
+  # 1. Drift guard: the version in pyproject.toml at the tagged commit MUST equal
+  #    the tag (minus the leading 'v'). Parsed with tomllib, never sed/grep.
+  verify-version:
+    name: Verify pyproject version matches tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Compare tag to pyproject version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          TAG_VERSION="${TAG#v}"
+          PYPROJECT_VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          echo "tag=${TAG}  tag_version=${TAG_VERSION}  pyproject_version=${PYPROJECT_VERSION}"
+          if [ "${TAG_VERSION}" != "${PYPROJECT_VERSION}" ]; then
+            echo "::error::Tag version '${TAG_VERSION}' does not match pyproject version '${PYPROJECT_VERSION}'"
+            exit 1
+          fi
+          echo "Version guard OK: ${TAG_VERSION} == ${PYPROJECT_VERSION}"
+
+  # 2. Build wheel + sdist once, upload as the single source of truth artifact.
+  build:
+    name: Build wheel and sdist
+    needs: [verify-version]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Build distributions
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # 3. Install the built WHEEL (not -e, not the source tree) into a fresh venv on
+  #    every supported Python and run the suite against the installed artifact.
+  test-wheel:
+    name: test wheel (py${{ matrix.python-version }})
+    needs: [build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - name: Checkout (for the tests/ directory only)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install the wheel into a fresh venv and test it
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/wheel-venv"
+          VPY="${RUNNER_TEMP}/wheel-venv/bin/python"
+          "${VPY}" -m pip install --upgrade pip
+          WHEEL="$(ls dist/*.whl)"
+          echo "Installing wheel: ${WHEEL}"
+          "${VPY}" -m pip install "${WHEEL}" pytest
+          # Run from a clean dir that does NOT contain ./cdfibenchmark, so
+          # `import cdfibenchmark` resolves to the installed wheel, never source.
+          TESTDIR="${RUNNER_TEMP}/wheel-tests"
+          mkdir -p "${TESTDIR}"
+          cp -R tests "${TESTDIR}/tests"
+          cd "${TESTDIR}"
+          "${VPY}" -m pytest tests --import-mode=importlib
+
+  # 4. Publish to PyPI via OIDC Trusted Publisher. Needs all three gates green.
+  #    This is the ONLY job with id-token: write, and it uses no API token.
+  publish:
+    name: Publish to PyPI (Trusted Publisher / OIDC)
+    needs: [verify-version, build, test-wheel]
+    runs-on: ubuntu-latest
+    environment: pypi
+    # Overrides the top-level read-only default: the single elevated scope, here only.
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0

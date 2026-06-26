@@ -17,3 +17,9 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/Jaypatel1511/cdfi-benchmark"
+
+[tool.pytest.ini_options]
+# Test the INSTALLED package, not the repo-root source tree. The default import
+# mode prepends the repo root to sys.path, which would shadow the installed
+# wheel with ./cdfibenchmark and silently test source instead of the artifact.
+addopts = "--import-mode=importlib"
