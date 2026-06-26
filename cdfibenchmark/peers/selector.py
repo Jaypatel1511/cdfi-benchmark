@@ -1,8 +1,9 @@
 """
 Peer group selection logic for CDFI benchmarking.
 """
-from cdfibenchmark.data.schema import InstitutionProfile, ASSET_BUCKETS
+from cdfibenchmark.data.schema import InstitutionProfile, ASSET_BUCKETS, _is_missing
 from cdfibenchmark.data.fdic import get_peer_financials
+from cdfibenchmark.exceptions import FDICResponseError
 
 
 def build_peer_group(
@@ -27,6 +28,16 @@ def build_peer_group(
     Returns:
         List of InstitutionProfile objects (excluding the institution itself)
     """
+    # Unknown (NaN) assets make the peer asset window undefined. Fail loud —
+    # int(NaN) would otherwise raise a bare ValueError, and silently returning
+    # [] would let an unknown-asset bank read as "no peers found", the same
+    # absence-reads-as-result failure this release eliminates.
+    if _is_missing(institution.total_assets):
+        raise FDICResponseError(
+            f"cannot select peers for an institution with unknown assets: "
+            f"CERT {institution.cert}"
+        )
+
     assets = institution.total_assets
     min_assets = int(assets * (1 - asset_tolerance))
     max_assets = int(assets * (1 + asset_tolerance))

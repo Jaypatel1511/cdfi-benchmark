@@ -2,7 +2,7 @@ import pytest
 import requests
 from unittest.mock import patch
 
-from cdfibenchmark import FDICAPIError
+from cdfibenchmark import FDICAPIError, FDICResponseError
 from cdfibenchmark.data import fdic
 from cdfibenchmark.peers.selector import build_peer_group, build_sample_peer_group
 from cdfibenchmark.data.schema import InstitutionProfile
@@ -44,3 +44,17 @@ def test_build_peer_group_propagates_transport_failure(sample_institution):
         with pytest.raises(FDICAPIError):
             build_peer_group(sample_institution)
     assert mock_get.called
+
+
+def test_build_peer_group_raises_on_unknown_assets(nan_cored_institution):
+    """An institution with unknown (NaN) assets cannot have peers selected.
+
+    Selecting peers requires an asset window; NaN assets make that window
+    undefined. The selector must raise FDICResponseError naming the CERT —
+    NOT leak a bare ValueError (int(NaN)), and NOT silently return [] (zero
+    peers for an unknown-asset bank is the same absence-reads-as-result
+    failure this release eliminates).
+    """
+    with pytest.raises(FDICResponseError) as excinfo:
+        build_peer_group(nan_cored_institution)
+    assert str(nan_cored_institution.cert) in str(excinfo.value)

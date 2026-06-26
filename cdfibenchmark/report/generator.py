@@ -3,11 +3,32 @@ Generate CDFI peer benchmarking reports.
 """
 import pandas as pd
 from cdfibenchmark.data.schema import (
-    InstitutionProfile, BenchmarkResult, BENCHMARKS
+    InstitutionProfile, BenchmarkResult, BENCHMARKS, _is_missing
 )
 from cdfibenchmark.metrics.calculator import (
     compute_peer_metrics, benchmark_institution, rank_institution
 )
+
+
+def _fmt_pct(value) -> str:
+    """Render a metric as a percentage, mapping absent/unknown to "N/A".
+
+    Gate on missingness, not truthiness: None/NaN → "N/A", but a real present
+    0.0 renders "0.00%" (never erased) and NaN never leaks as "nan%".
+    """
+    if _is_missing(value):
+        return "N/A"
+    return f"{value:.2f}%"
+
+
+def _fmt_assets_mm(value_mm) -> str:
+    """Render an asset figure (already in $MM), mapping absent/unknown to "N/A".
+
+    A real present 0.0 renders "$0.0MM"; NaN never leaks as "$nanMM".
+    """
+    if _is_missing(value_mm):
+        return "N/A"
+    return f"${value_mm:.1f}MM"
 
 
 METRIC_LABELS = {
@@ -38,7 +59,7 @@ def generate_report(
         "",
         f"**Institution:** {institution.name}",
         f"**Location:** {institution.city}, {institution.state}",
-        f"**Total Assets:** ${institution.total_assets_mm:.1f}MM",
+        f"**Total Assets:** {_fmt_assets_mm(institution.total_assets_mm)}",
         f"**Asset Bucket:** {institution.asset_bucket.title()}",
         f"**Report Date:** {institution.report_date}",
         f"**Peer Group Size:** {len(peers)} institutions",
@@ -53,10 +74,10 @@ def generate_report(
 
     for result in results:
         label = METRIC_LABELS.get(result.metric, result.metric)
-        inst_val = f"{result.institution_value:.2f}%" if result.institution_value else "N/A"
-        median = f"{result.peer_median:.2f}%" if result.peer_median else "N/A"
-        p25 = f"{result.peer_25th:.2f}%" if result.peer_25th else "N/A"
-        p75 = f"{result.peer_75th:.2f}%" if result.peer_75th else "N/A"
+        inst_val = _fmt_pct(result.institution_value)
+        median = _fmt_pct(result.peer_median)
+        p25 = _fmt_pct(result.peer_25th)
+        p75 = _fmt_pct(result.peer_75th)
         status_emoji = {
             "STRONG": "✅ STRONG",
             "ADEQUATE": "⚠️ ADEQUATE",
@@ -81,14 +102,14 @@ def generate_report(
         lines.append(f"### {label}")
         lines.append("")
 
-        if result.institution_value is not None:
-            lines.append(f"**Institution Value:** {result.institution_value:.2f}%")
-        if result.peer_median is not None:
-            lines.append(f"**Peer Median:** {result.peer_median:.2f}%")
-        if result.vs_median is not None:
+        if not _is_missing(result.institution_value):
+            lines.append(f"**Institution Value:** {_fmt_pct(result.institution_value)}")
+        if not _is_missing(result.peer_median):
+            lines.append(f"**Peer Median:** {_fmt_pct(result.peer_median)}")
+        if not _is_missing(result.vs_median):
             direction = "above" if result.vs_median > 0 else "below"
             lines.append(
-                f"**vs Peer Median:** {abs(result.vs_median):.2f}% {direction} median"
+                f"**vs Peer Median:** {_fmt_pct(abs(result.vs_median))} {direction} median"
             )
 
         benchmark = BENCHMARKS.get(result.metric, {})
@@ -121,8 +142,8 @@ def generate_report(
     if "total_assets_mm" in peer_df.columns:
         lines.append(
             f"**Peer Asset Range:** "
-            f"${peer_df['total_assets_mm'].min():.1f}MM – "
-            f"${peer_df['total_assets_mm'].max():.1f}MM"
+            f"{_fmt_assets_mm(peer_df['total_assets_mm'].min())} – "
+            f"{_fmt_assets_mm(peer_df['total_assets_mm'].max())}"
         )
     if "state" in peer_df.columns:
         states = peer_df["state"].nunique()

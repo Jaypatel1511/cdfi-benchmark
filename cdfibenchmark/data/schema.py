@@ -19,41 +19,6 @@ def _is_missing(x) -> bool:
 # ── FDIC BankFind Suite API ───────────────────────────────────────────────────
 FDIC_API_BASE = "https://banks.data.fdic.gov/api"
 
-# Key call report fields we pull
-FDIC_FIELDS = [
-    "REPDTE",       # Report date
-    "CERT",         # FDIC certificate number
-    "INSTNAME",     # Institution name
-    "CITY",         # City
-    "STALP",        # State abbreviation
-    "ASSET",        # Total assets
-    "DEP",          # Total deposits
-    "LNLSNET",      # Net loans and leases
-    "NETINC",       # Net income
-    "INTINC",       # Total interest income
-    "EINTEXP",      # Total interest expense
-    "NONII",        # Non-interest income
-    "NONIX",        # Non-interest expense
-    "EQ",           # Total equity capital
-    "RBCT1J",       # Tier 1 capital ratio (leverage)
-    "REPDTE",       # Report date
-    "LNLSNET",      # Net loans
-    "LNLSDEPM",     # Loans to deposits ratio
-    "NCLNLS",       # Non-current loans
-    "LNATRES",      # Loan loss allowance
-    "LNLSGR",       # Gross loans
-    "INTEXP",       # Interest expense
-    "NIM",          # Net interest margin
-    "ROA",          # Return on assets
-    "ROE",          # Return on equity
-    "LNLSDEPM",     # Loan to deposit ratio
-    "EFFRATIO",     # Efficiency ratio
-    "INTINC",       # Interest income
-]
-
-# Deduplicated list
-FDIC_FIELDS = list(dict.fromkeys(FDIC_FIELDS))
-
 # ── Asset Size Buckets ────────────────────────────────────────────────────────
 ASSET_BUCKETS = {
     "micro":    (0,           50_000),      # Under $50MM
