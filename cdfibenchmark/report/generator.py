@@ -36,7 +36,7 @@ METRIC_LABELS = {
     "efficiency_ratio":  "Efficiency Ratio",
     "roaa":              "Return on Avg Assets (ROAA)",
     "roae":              "Return on Avg Equity (ROAE)",
-    "tier1_ratio":       "Tier 1 Capital Ratio",
+    "tier1_ratio":       "Tier 1 Leverage Ratio",
     "loans_to_deposits": "Loans-to-Deposits",
     "npl_ratio":         "Non-Performing Loan Ratio",
     "reserve_coverage":  "Loan Loss Reserve Coverage",

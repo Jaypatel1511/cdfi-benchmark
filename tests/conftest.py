@@ -20,7 +20,7 @@ def sample_institution():
         non_interest_income=3_500,
         non_interest_expense=22_000,
         total_equity=48_000,
-        tier1_ratio=12.2,
+        tier1_ratio=12.2,   # Tier 1 LEVERAGE ratio (%), sourced from RBC1AAJ
         gross_loans=390_000,
         non_current_loans=5_850,
         loan_loss_allowance=7_800,
@@ -56,7 +56,7 @@ def present_zero_cored_institution():
         non_interest_income=3_500,
         non_interest_expense=22_000,
         total_equity=48_000,
-        tier1_ratio=12.2,
+        tier1_ratio=12.2,   # Tier 1 LEVERAGE ratio (%), sourced from RBC1AAJ
         gross_loans=390_000,
         non_current_loans=5_850,
         loan_loss_allowance=7_800,

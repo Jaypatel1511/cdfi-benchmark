@@ -1,6 +1,14 @@
 import pytest
 import pandas as pd
-from cdfibenchmark.report.generator import generate_report, summary_table
+from cdfibenchmark.report.generator import (
+    generate_report, summary_table, METRIC_LABELS
+)
+
+
+# ── D1: the tier1 metric is a leverage ratio, so its label must say so. The old
+# "Tier 1 Capital Ratio" label was never true of any value the package showed.
+def test_tier1_label_reads_leverage_not_capital():
+    assert METRIC_LABELS["tier1_ratio"] == "Tier 1 Leverage Ratio"
 
 
 def test_generate_report_returns_string(sample_institution, sample_peers):

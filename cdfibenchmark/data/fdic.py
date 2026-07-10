@@ -45,7 +45,7 @@ def get_institution(cert: int) -> Optional[dict]:
     url = f"{FDIC_API_BASE}/institutions"
     params = {
         "filters": f"CERT:{cert}",
-        "fields": "CERT,INSTNAME,CITY,STALP,ASSET,ACTIVE",
+        "fields": "CERT,NAME,CITY,STALP,ASSET,ACTIVE",
         "limit": 1,
         "format": "json",
     }
@@ -80,8 +80,6 @@ def search_institutions(
     Returns a DataFrame of matching institutions.
     """
     filters = ["ACTIVE:1"]
-    if name:
-        filters.append(f'INSTNAME:"{name}"')
     if state:
         filters.append(f"STALP:{state.upper()}")
     if min_assets:
@@ -93,12 +91,17 @@ def search_institutions(
     url = f"{FDIC_API_BASE}/institutions"
     params = {
         "filters": filter_str,
-        "fields": "CERT,INSTNAME,CITY,STALP,ASSET",
+        "fields": "CERT,NAME,CITY,STALP,ASSET",
         "limit": limit,
         "sort_by": "ASSET",
         "sort_order": "DESC",
         "format": "json",
     }
+    # Name matching goes through the `search` parameter, not a filter. An
+    # exact-phrase filters=NAME:"<name>" never matches substrings; search=NAME:
+    # does the substring/relevance match the FDIC API is designed for.
+    if name:
+        params["search"] = f"NAME:{name}"
 
     try:
         r = requests.get(url, params=params, timeout=TIMEOUT)
@@ -142,10 +145,10 @@ def get_financials(
     """
     url = f"{FDIC_API_BASE}/financials"
     fields = [
-        "REPDTE", "CERT", "INSTNAME", "CITY", "STALP",
+        "REPDTE", "CERT", "NAME", "CITY", "STALP",
         "ASSET", "DEP", "LNLSNET", "NETINC",
         "INTINC", "EINTEXP", "NONII", "NONIX", "EQ",
-        "RBCT1J", "LNLSGR", "NCLNLS", "LNATRES",
+        "RBC1AAJ", "RBCT1J", "LNLSGR", "NCLNLS", "LNATRES",
     ]
 
     filters = f"CERT:{cert}"
@@ -202,10 +205,10 @@ def get_peer_financials(
     """
     url = f"{FDIC_API_BASE}/financials"
     fields = [
-        "REPDTE", "CERT", "INSTNAME", "CITY", "STALP",
+        "REPDTE", "CERT", "NAME", "CITY", "STALP",
         "ASSET", "DEP", "LNLSNET", "NETINC",
         "INTINC", "EINTEXP", "NONII", "NONIX", "EQ",
-        "RBCT1J", "LNLSGR", "NCLNLS", "LNATRES",
+        "RBC1AAJ", "RBCT1J", "LNLSGR", "NCLNLS", "LNATRES",
     ]
 
     filters = ["ASSET:[1 TO *]"]
@@ -252,23 +255,43 @@ def get_peer_financials(
         ) from e
 
 
-def _coerce_float(row: dict, key: str, *, absent):
+# Plausibility bound for percentage/ratio-class fields. A leverage or capital
+# ratio lives in roughly [-100, 150]; a value outside that band is a dollar
+# amount that has been mapped into a ratio slot (wrong field class or FDIC API
+# drift), not a real percentage. Dollar-class fields (assets, loans, capital in
+# thousands) legitimately exceed this and must NOT be bounded.
+_RATIO_MIN = -100.0
+_RATIO_MAX = 150.0
+
+
+def _coerce_float(row: dict, key: str, *, absent, ratio_class: bool = False):
     """Coerce ``row[key]`` to float under the field-level empty-vs-error rule.
 
     absent / null  → ``absent`` (NaN for core financials, None for optional
                      ratios) — NEVER a fabricated 0.0.
     present & numeric → the float value, so a real present 0.0 is preserved.
     present & non-numeric → FDICResponseError naming the offending field.
+
+    ``ratio_class`` fields carry a defense-in-depth plausibility bound: a value
+    outside [-100, 150] cannot be a percentage and raises FDICResponseError,
+    so a future wrong-field-class regression (e.g. a dollar field remapped into
+    the ratio slot) fails loud instead of grading a nonsense value.
     """
     if key not in row or row[key] is None:
         return absent
     val = row[key]
     try:
-        return float(val)
+        f = float(val)
     except (TypeError, ValueError) as e:
         raise FDICResponseError(
             f"FDIC field {key} is present but not float-coercible: {val!r}"
         ) from e
+    if ratio_class and not (_RATIO_MIN <= f <= _RATIO_MAX):
+        raise FDICResponseError(
+            f"FDIC ratio-class field {key} value {f} cannot be a percentage — "
+            f"wrong field class or API drift"
+        )
+    return f
 
 
 def _parse_institution(row: dict) -> InstitutionProfile:
@@ -298,7 +321,7 @@ def _parse_institution(row: dict) -> InstitutionProfile:
 
     return InstitutionProfile(
         cert=cert,
-        name=str(row.get("INSTNAME", "Unknown")),
+        name=str(row.get("NAME", "Unknown")),
         city=str(row.get("CITY", "")),
         state=str(row.get("STALP", "")),
         report_date=str(row.get("REPDTE", "")),
@@ -311,7 +334,10 @@ def _parse_institution(row: dict) -> InstitutionProfile:
         non_interest_income=_coerce_float(row, "NONII", absent=float("nan")),
         non_interest_expense=_coerce_float(row, "NONIX", absent=float("nan")),
         total_equity=_coerce_float(row, "EQ", absent=float("nan")),
-        tier1_ratio=_coerce_float(row, "RBCT1J", absent=None),
+        # tier1_ratio holds the Tier 1 LEVERAGE ratio (RBC1AAJ, a percent) — a
+        # ratio-class field. Never RBCT1J, which is Tier One Capital in dollars.
+        tier1_ratio=_coerce_float(row, "RBC1AAJ", absent=None, ratio_class=True),
+        # Loan fields are dollar-class (thousands) — not bounded.
         gross_loans=_coerce_float(row, "LNLSGR", absent=None),
         non_current_loans=_coerce_float(row, "NCLNLS", absent=None),
         loan_loss_allowance=_coerce_float(row, "LNATRES", absent=None),

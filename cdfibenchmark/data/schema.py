@@ -34,7 +34,10 @@ BENCHMARKS = {
     "efficiency_ratio": {"good": 60,  "warning": 80,   "unit": "%", "lower_is_better": True},
     "roaa":             {"good": 1.0, "warning": 0.5,  "unit": "%"},
     "roae":             {"good": 10,  "warning": 5,    "unit": "%"},
-    "tier1_ratio":      {"good": 12,  "warning": 8,    "unit": "%"},
+    # tier1_ratio grades the Tier 1 LEVERAGE ratio (RBC1AAJ). STRONG >= 9 is the
+    # CBLR qualifying level (12 CFR 324.12); ADEQUATE >= 5 is the leverage-ratio
+    # minimum for "well capitalized" under PCA (12 CFR 324.403); WEAK < 5.
+    "tier1_ratio":      {"good": 9,   "warning": 5,    "unit": "%"},
     "loans_to_deposits":{"good": 80,  "warning": 95,   "unit": "%"},
     "npl_ratio":        {"good": 1.0, "warning": 3.0,  "unit": "%", "lower_is_better": True},
     "reserve_coverage": {"good": 100, "warning": 50,   "unit": "%"},
@@ -93,7 +96,12 @@ class InstitutionProfile:
 
     @property
     def efficiency_ratio(self) -> Optional[float]:
-        revenue = self.interest_income + self.non_interest_income
+        # FDIC EEFFR: noninterest expense as a percent of NET interest income
+        # plus noninterest income. The denominator is net interest income
+        # (interest_income − interest_expense), NOT gross interest income —
+        # using gross understates the ratio at every period.
+        revenue = ((self.interest_income - self.interest_expense)
+                   + self.non_interest_income)
         if _is_missing(revenue):
             return float("nan")
         if revenue > 0:

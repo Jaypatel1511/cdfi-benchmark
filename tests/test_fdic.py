@@ -39,9 +39,16 @@ def _response(payload=None, *, raise_status=None, json_exc=None):
     return resp
 
 
+# Field semantics verified against the FDIC data dictionary + live API, July 2026:
+#   RBCT1J  = Tier One (Core) Capital, YTD — DOLLARS (thousands), NOT a ratio.
+#   RBC1AAJ = Leverage (Core Capital) Ratio — PERCENT (the real tier1 ratio).
+#   NAME    = institution name (NOT INSTNAME, which isn't on these endpoints).
+# Do NOT "simplify" RBCT1J to a small round number: its dollar magnitude here is
+# exactly what makes the wrong-field-class guard (D1b) testable — a regression
+# that remaps RBCT1J into the ratio slot trips the [-100, 150] plausibility bound.
 WELL_FORMED_ROW = {
     "CERT": 57542,
-    "INSTNAME": "Broadway Federal Bank",
+    "NAME": "Broadway Federal Bank",
     "CITY": "Los Angeles",
     "STALP": "CA",
     "REPDTE": "20241231",
@@ -54,7 +61,8 @@ WELL_FORMED_ROW = {
     "NONII": 3500,
     "NONIX": 22000,
     "EQ": 48000,
-    "RBCT1J": 12.2,
+    "RBCT1J": 134229,   # dollars (thousands) — present in the response, unmapped
+    "RBC1AAJ": 12.2,    # percent — the leverage ratio that grades the tier1 slot
     "LNLSGR": 390000,
     "NCLNLS": 5850,
     "LNATRES": 7800,
@@ -120,7 +128,7 @@ def test_malformed_shape_raises_response_error(op, call, ctx):
 
 def test_non_numeric_cert_raises_response_error():
     """A row that decodes fine but has a non-numeric CERT is a schema problem."""
-    payload = {"data": [{"data": {"CERT": "not-a-number", "INSTNAME": "X"}}]}
+    payload = {"data": [{"data": {"CERT": "not-a-number", "NAME": "X"}}]}
     with patch.object(fdic.requests, "get", return_value=_response(payload)) as mock_get:
         with pytest.raises(FDICResponseError):
             fdic.get_financials(57542)
@@ -268,19 +276,20 @@ def test_garbage_core_netinc_raises_naming_netinc(op, call):
 
 @pytest.mark.parametrize("op,call", PARSE_CALLS)
 def test_garbage_optional_ratio_raises_naming_field(op, call):
-    """An optional ratio present-but-garbage is still a contract breach."""
-    record = dict(WELL_FORMED_ROW, RBCT1J="garbage")
+    """An optional ratio present-but-garbage is still a contract breach. The
+    tier1 slot now sources the ratio field RBC1AAJ, so that is the field named."""
+    record = dict(WELL_FORMED_ROW, RBC1AAJ="garbage")
     with patch.object(fdic.requests, "get", return_value=_response(_wrap(record))) as mock_get:
         with pytest.raises(FDICResponseError) as exc:
             call()
-    assert "RBCT1J" in str(exc.value)
+    assert "RBC1AAJ" in str(exc.value)
     assert mock_get.called
 
 
 @pytest.mark.parametrize("op,extract", PARSE_PROFILE)
 def test_absent_optional_ratio_is_none_not_zero(op, extract):
     """Optional ratio absent → None (legitimately sparse), never 0.0."""
-    record = {k: v for k, v in WELL_FORMED_ROW.items() if k != "RBCT1J"}
+    record = {k: v for k, v in WELL_FORMED_ROW.items() if k != "RBC1AAJ"}
     with patch.object(fdic.requests, "get", return_value=_response(_wrap(record))) as mock_get:
         profile = extract()
     assert profile.tier1_ratio is None
@@ -291,7 +300,7 @@ def test_absent_optional_ratio_is_none_not_zero(op, extract):
 @pytest.mark.parametrize("op,extract", PARSE_PROFILE)
 def test_present_zero_optional_ratio_preserved(op, extract):
     """A real present 0.0 ratio must survive — `safe_float(...) or None` erased it."""
-    record = dict(WELL_FORMED_ROW, RBCT1J=0.0)
+    record = dict(WELL_FORMED_ROW, RBC1AAJ=0.0)
     with patch.object(fdic.requests, "get", return_value=_response(_wrap(record))) as mock_get:
         profile = extract()
     assert profile.tier1_ratio == 0.0
@@ -321,6 +330,113 @@ def test_present_zero_core_preserved(op, extract):
     assert profile.total_assets == 0.0
     assert not math.isnan(profile.total_assets)
     assert mock_get.called
+
+
+# ── D1 / D1-guard: the tier1 slot carries the LEVERAGE RATIO (RBC1AAJ, a
+# percent), NEVER the dollar Tier-One-Capital field (RBCT1J). And a ratio-class
+# field arriving with a dollar-magnitude value fails loud (defense-in-depth).
+def _leverage_row(**overrides):
+    """A realistic /financials row: RBCT1J is dollars (thousands), RBC1AAJ is a
+    percent. Magnitude realism here is what makes the wrong-field-class guard
+    testable — do not 'simplify' RBCT1J to a small round number."""
+    row = {
+        "CERT": 25883, "NAME": "First Eagle  Bank", "CITY": "Chicago",
+        "STALP": "IL", "REPDTE": "20260331",
+        "ASSET": 655000, "DEP": 520000, "LNLSNET": 380000, "NETINC": 1950,
+        "INTINC": 28000, "EINTEXP": 8000, "NONII": 3500, "NONIX": 22000,
+        "EQ": 48000,
+        "RBCT1J": 134229,   # Tier One (Core) Capital, YTD $ — dollars, NOT a ratio
+        "RBC1AAJ": 21.46,   # Leverage (Core Capital) Ratio, % — the real ratio
+        "LNLSGR": 390000, "NCLNLS": 5850, "LNATRES": 7800,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_name_read_from_NAME_key_preserves_double_space():
+    """D3: the parser reads the institution name from NAME (not INSTNAME, which
+    is absent on these endpoints). The stored name's internal double space is
+    preserved, not normalised."""
+    row = _leverage_row(NAME="First Eagle  Bank")
+    with patch.object(fdic.requests, "get",
+                      return_value=_response(_wrap(row))) as mock_get:
+        profile = fdic.get_financials(25883)
+    assert profile.name == "First Eagle  Bank"
+    assert mock_get.called
+
+
+def test_tier1_slot_uses_leverage_ratio_not_dollar_field():
+    """D1a: the graded tier1 value is the leverage ratio 21.46 (RBC1AAJ), not the
+    dollar Tier-One-Capital 134229 (RBCT1J)."""
+    with patch.object(fdic.requests, "get",
+                      return_value=_response(_wrap(_leverage_row()))) as mock_get:
+        profile = fdic.get_financials(25883)
+    assert profile.tier1_ratio == pytest.approx(21.46)
+    assert profile.tier1_ratio != 134229
+    assert mock_get.called
+
+
+def test_ratio_class_field_out_of_range_raises_naming_field():
+    """D1b: a dollar-magnitude value arriving in a ratio-class slot fails loud,
+    naming the offending field and value."""
+    row = _leverage_row(RBC1AAJ=134229)   # wrong field class / API drift
+    with patch.object(fdic.requests, "get",
+                      return_value=_response(_wrap(row))) as mock_get:
+        with pytest.raises(FDICResponseError) as exc:
+            fdic.get_financials(25883)
+    msg = str(exc.value)
+    assert "RBC1AAJ" in msg
+    assert "134229" in msg
+    assert mock_get.called
+
+
+def test_dollar_class_field_large_value_not_bounded():
+    """The guard must NOT bound dollar-class fields: gross loans of 390000 (a
+    legitimate thousands-of-dollars magnitude) must parse without raising."""
+    with patch.object(fdic.requests, "get",
+                      return_value=_response(_wrap(_leverage_row(LNLSGR=5_000_000)))) as mock_get:
+        profile = fdic.get_financials(25883)
+    assert profile.gross_loans == pytest.approx(5_000_000)
+    assert mock_get.called
+
+
+# ── D2: name search must use the search=NAME: parameter, not an INSTNAME filter
+# The FDIC API matches names via the `search` query parameter (search=NAME:Eagle
+# → 60 hits). The old code used filters=INSTNAME:"<name>" — an exact-phrase
+# filter that never matches substrings and reads a field (INSTNAME) that isn't on
+# the /institutions response. This surfaced nothing for real name queries.
+def _name_search_response():
+    """Mock the real /institutions response shape for a NAME query, including
+    First Eagle's stored double-space name."""
+    return _response({"data": [
+        {"data": {"CERT": 25883, "NAME": "First Eagle  Bank",
+                  "CITY": "Chicago", "STALP": "IL", "ASSET": 500000}},
+        {"data": {"CERT": 12345, "NAME": "Eagle Bank",
+                  "CITY": "Everett", "STALP": "MA", "ASSET": 900000}},
+    ]})
+
+
+def test_search_by_name_surfaces_matches():
+    with patch.object(fdic.requests, "get",
+                      return_value=_name_search_response()) as mock_get:
+        df = fdic.search_institutions("Eagle")
+    assert not df.empty
+    # double space preserved, not normalised
+    assert "First Eagle  Bank" in df["NAME"].values
+
+
+def test_search_by_name_uses_search_param_not_instname_filter():
+    with patch.object(fdic.requests, "get",
+                      return_value=_name_search_response()) as mock_get:
+        fdic.search_institutions("Eagle")
+    params = mock_get.call_args.kwargs["params"]
+    assert params.get("search") == "NAME:Eagle", (
+        f"expected search=NAME:Eagle, got params={params!r}"
+    )
+    # the failed exact-phrase INSTNAME filter must be gone
+    assert "INSTNAME" not in params.get("filters", "")
+    # ACTIVE:1 is still enforced in filters
+    assert "ACTIVE:1" in params.get("filters", "")
 
 
 # ── (f) top-level "data": null → FDICResponseError on ALL FOUR fetchers ───────

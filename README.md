@@ -81,10 +81,17 @@ tables by hand. cdfi-benchmark automates the entire workflow in Python.
 | Efficiency Ratio | Non-interest expense / Revenue | <= 60% |
 | ROAA | Return on Average Assets | >= 1.0% |
 | ROAE | Return on Average Equity | >= 10% |
-| Tier 1 Capital Ratio | Regulatory capital ratio | >= 12% |
+| Tier 1 Leverage Ratio | Tier 1 core capital / average assets (FDIC `RBC1AAJ`) | >= 9% |
 | Loans-to-Deposits | Loan utilization | <= 80% |
 | NPL Ratio | Non-performing loans / Gross loans | <= 1.0% |
 | Reserve Coverage | Loan loss reserve / NPLs | >= 100% |
+
+---
+
+The **Tier 1 Leverage Ratio** thresholds follow bank-capital regulation, not an
+arbitrary target: Strong `>= 9%` is the Community Bank Leverage Ratio (CBLR)
+qualifying level (12 CFR 324.12) and Adequate `>= 5%` is the leverage-ratio
+minimum for "well capitalized" under Prompt Corrective Action (12 CFR 324.403).
 
 ---
 
@@ -151,7 +158,7 @@ its shape" (`FDICResponseError`):
 
     PYTHONPATH=. pytest tests/ -v
 
-79 tests across all modules.
+96 tests across all modules.
 
 ---
 
