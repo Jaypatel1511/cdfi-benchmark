@@ -95,8 +95,9 @@ def test_efficiency_ratio_nonpositive_denominator_is_none():
 
 
 # ── D1: tier1 slot is graded as a LEVERAGE ratio. Thresholds reset for a
-# leverage ratio: STRONG >= 9 (CBLR qualifying level, 12 CFR 324.12),
-# ADEQUATE >= 5 (well-capitalized leverage minimum, PCA), WEAK < 5.
+# leverage ratio: STRONG >= 8 (CBLR qualifying level, 12 CFR 324.12, lowered
+# 9%->8% eff. 2026-07-01), ADEQUATE >= 5 (well-capitalized leverage minimum,
+# PCA), WEAK < 5.
 def _tier1_status(value):
     return BenchmarkResult(
         metric="tier1_ratio", institution_value=value,
@@ -106,7 +107,7 @@ def _tier1_status(value):
 
 def test_tier1_leverage_thresholds():
     assert _tier1_status(21.46) == "STRONG"
-    assert _tier1_status(9.0) == "STRONG"    # CBLR qualifying
-    assert _tier1_status(8.99) == "ADEQUATE"
+    assert _tier1_status(8.0) == "STRONG"    # CBLR qualifying (lowered to 8% 2026-07-01)
+    assert _tier1_status(7.99) == "ADEQUATE"
     assert _tier1_status(5.0) == "ADEQUATE"  # PCA well-capitalized minimum
     assert _tier1_status(4.99) == "WEAK"

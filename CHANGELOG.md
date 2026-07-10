@@ -21,9 +21,10 @@ wrong so downstream users can re-check any conclusions drawn from them.
   `tier1_ratio` is kept for back-compat but every display label is renamed from
   "Tier 1 Capital Ratio" to **"Tier 1 Leverage Ratio"** — the old label was never
   true of any value the package showed. Thresholds are reset for a leverage
-  ratio: STRONG `>= 9` (CBLR qualifying, 12 CFR 324.12), ADEQUATE `>= 5`
-  (well-capitalized leverage minimum under PCA, 12 CFR 324.403), WEAK `< 5`
-  (previously an uncalibrated `good=12 / warning=8`). An absent `RBC1AAJ` is
+  ratio: STRONG `>= 8` (CBLR qualifying, 12 CFR 324.12, lowered from 9%
+  effective 2026-07-01), ADEQUATE `>= 5` (well-capitalized leverage minimum
+  under PCA, 12 CFR 324.403), WEAK `< 5` (previously an uncalibrated
+  `good=12 / warning=8`). An absent `RBC1AAJ` is
   `None` → status N/A; the parser never falls back to the dollar field.
 - **Parse-layer plausibility bound on ratio-class fields (D1-guard).** A
   ratio-class field (the leverage ratio) whose value falls outside `[-100, 150]`

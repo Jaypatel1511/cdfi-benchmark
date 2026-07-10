@@ -34,10 +34,10 @@ BENCHMARKS = {
     "efficiency_ratio": {"good": 60,  "warning": 80,   "unit": "%", "lower_is_better": True},
     "roaa":             {"good": 1.0, "warning": 0.5,  "unit": "%"},
     "roae":             {"good": 10,  "warning": 5,    "unit": "%"},
-    # tier1_ratio grades the Tier 1 LEVERAGE ratio (RBC1AAJ). STRONG >= 9 is the
-    # CBLR qualifying level (12 CFR 324.12); ADEQUATE >= 5 is the leverage-ratio
-    # minimum for "well capitalized" under PCA (12 CFR 324.403); WEAK < 5.
-    "tier1_ratio":      {"good": 9,   "warning": 5,    "unit": "%"},
+    # tier1_ratio grades the Tier 1 LEVERAGE ratio (RBC1AAJ). STRONG >= 8 = CBLR
+    # qualifying level (12 CFR 324.12, lowered 9%->8% eff. 2026-07-01); ADEQUATE
+    # >= 5 = PCA well-capitalized leverage (12 CFR 324.403(b)(1)); WEAK < 5.
+    "tier1_ratio":      {"good": 8,   "warning": 5,    "unit": "%"},
     "loans_to_deposits":{"good": 80,  "warning": 95,   "unit": "%"},
     "npl_ratio":        {"good": 1.0, "warning": 3.0,  "unit": "%", "lower_is_better": True},
     "reserve_coverage": {"good": 100, "warning": 50,   "unit": "%"},
