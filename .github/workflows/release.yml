@@ -42,10 +42,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -69,10 +69,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -90,6 +90,28 @@ jobs:
       # for a deliberate source change. The invariant that actually matters is
       # "the tarball contains every test module the repository has", which needs
       # no threshold.
+      #
+      # WHAT THIS STEP DOES NOT CERTIFY -- read this before "simplifying" the
+      # pipeline down to this one count. It compares test_*.py names ONLY, and
+      # setuptools' legacy sdist default ALREADY matches tests/test*.py. So on
+      # a completely broken MANIFEST.in this assertion still PASSES. Measured
+      # on the pre-fix tarball for this repo: 5 test modules in the checkout,
+      # 5 in the sdist, green -- while tests/conftest.py and tests/__init__.py
+      # were both absent, which is the exact defect that produced 58 passed /
+      # 38 errors and the reason this pipeline exists. conftest.py is not a
+      # test_*.py, so nothing here can ever see it go missing.
+      #
+      # This step fires only where the suite is NESTED, because the default
+      # pattern matches nothing below tests/. Verified across the sweep on
+      # pre-fix tarballs: cdfi-benchmark 5/5 PASS, hmda-analyzer 8/8 PASS,
+      # cdfi-data 4/4 PASS, nmtc-mapper 14/14 PASS -- only
+      # nmtc-application-builder failed, at 14 of 50.
+      #
+      # The check actually doing the work is the required-files loop in
+      # test-sdist, which asserts tests/conftest.py, tests/__init__.py,
+      # README.md and pyproject.toml are present in the tarball. Delete that
+      # loop and keep this count, and the release gate certifies nothing about
+      # the file whose absence broke 0.2.1.
       - name: Assert the sdist ships every test module in the checkout
         shell: bash
         run: |
@@ -121,7 +143,7 @@ jobs:
           echo "sdist ships every test module in the checkout"
 
       - name: Upload dist artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
@@ -139,15 +161,15 @@ jobs:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - name: Checkout (for the tests/ directory only)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Download dist artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
@@ -167,6 +189,16 @@ jobs:
           TESTDIR="${RUNNER_TEMP}/wheel-tests"
           mkdir -p "${TESTDIR}"
           cp -R tests "${TESTDIR}/tests"
+          # pyproject.toml comes too, matching the template. Without it this
+          # directory has NO ini file, so [tool.pytest.ini_options] never
+          # applies and empty_parameter_set_mark = fail_at_collect is inert --
+          # an empty parametrize goes back to being a silent skip in this job
+          # specifically. Measured in this exact layout: a planted empty
+          # parametrize gave `96 passed, 1 skipped`, exit 0. tests/ already
+          # comes from the checkout here, so taking pyproject.toml from it too
+          # changes nothing about what is under test: the WHEEL still supplies
+          # the package.
+          cp pyproject.toml "${TESTDIR}/pyproject.toml"
           cd "${TESTDIR}"
           "${VPY}" -m pytest tests --import-mode=importlib
 
@@ -188,12 +220,12 @@ jobs:
       # NOTE: deliberately NO actions/checkout. If the checkout is absent, it
       # cannot leak into the thing under test.
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Download dist artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
@@ -236,8 +268,10 @@ jobs:
           cp "${SRC}/README.md" "${TESTDIR}/README.md"
           # pyproject.toml comes along FROM THE TARBALL (not the repo — this job
           # still has no checkout) because it carries [tool.pytest.ini_options],
-          # which sets --import-mode=importlib. Without an ini file here pytest
-          # would fall back to prepend mode and the run would not match CI.
+          # which sets --import-mode=importlib and empty_parameter_set_mark.
+          # Without an ini file here pytest would fall back to prepend mode and
+          # an empty parametrize would go back to being a silent green skip.
+          # That it ARRIVED and is LIVE is asserted below — not assumed.
           cp "${SRC}/pyproject.toml" "${TESTDIR}/pyproject.toml"
           cd "${TESTDIR}"
 
@@ -258,10 +292,47 @@ jobs:
             exit 1
           fi
 
-          # --strict-markers so an unregistered marker can never pass as a mere
-          # warning: if the ini file stops reaching this directory, the job fails
-          # loudly instead of silently changing what gets collected.
-          "${VPY}" -m pytest tests --import-mode=importlib --strict-markers
+          # This check exists because the sentence that used to sit here was
+          # FALSE. It claimed --strict-markers meant "if the ini file stops
+          # reaching this directory, the job fails loudly instead of silently
+          # changing what gets collected." That is true in the sibling repos,
+          # which register markers and pass -m. It is not true here: this repo
+          # registers NO markers and passes NO -m, so --strict-markers has
+          # nothing to be strict about. Demonstrated -- replacing this
+          # directory's pyproject.toml with an EMPTY file still gives
+          # `96 passed`, exit 0. The comment asserted a protection the flag
+          # was not providing, which is the same false-assurance class the
+          # whole pipeline exists to close.
+          #
+          # So assert it directly instead of inferring it from a flag. The ini
+          # is load-bearing here: it carries empty_parameter_set_mark =
+          # fail_at_collect, and losing it silently re-enables the exact
+          # vacuity that setting was added to close -- an empty parametrize
+          # going back to a green skip.
+          #
+          # grep, not tomllib: this job runs on the 3.9 and 3.10 matrix legs
+          # too, where tomllib does not exist.
+          if ! grep -q '^\[tool\.pytest\.ini_options\]' pyproject.toml; then
+            echo "::error::pyproject.toml reached this directory but carries no"
+            echo "::error::[tool.pytest.ini_options] — the shipped suite is running unconfigured."
+            exit 1
+          fi
+          for key in addopts empty_parameter_set_mark; do
+            if ! grep -qE "^${key}[[:space:]]*=" pyproject.toml; then
+              echo "::error::[tool.pytest.ini_options] is present but has no '${key}'."
+              echo "::error::Either the tarball's pyproject.toml changed or MANIFEST.in stopped shipping it."
+              exit 1
+            fi
+          done
+          echo "pytest ini reached the run directory and carries its load-bearing keys"
+
+          # --strict-markers is kept for parity with the sibling repos and as a
+          # tripwire that arms itself the day this repo registers its first
+          # marker. It is inert today; the check above is what actually holds.
+          # --junitxml so the NEXT step can count what actually executed. The
+          # module-count check alone cannot: see the note there.
+          "${VPY}" -m pytest tests --import-mode=importlib --strict-markers \
+            --junitxml="${RUNNER_TEMP}/sdist-junit.xml"
 
       - name: Assert the sdist suite is not silently truncated
         shell: bash
@@ -281,6 +352,49 @@ jobs:
             exit 1
           fi
 
+          # The check above counts MODULES SHIPPED. It never counts EXECUTIONS,
+          # and those are different numbers: a suite where every test skips or
+          # is deselected exits 0 while shipping every module it should.
+          #   2 skipped in 0.00s     -> pytest exit code 0
+          #   1 deselected in 0.00s  -> pytest exit code 0
+          # So a marker change or a stray -m expression could silently deselect
+          # the entire suite and every gate here would stay green with the
+          # module count untouched. That is the same vacuity class as an empty
+          # parametrize, at job scale.
+          #
+          # FLOOR DERIVATION -- not a number picked to be safe. The rule is
+          # HALF of what the suite genuinely runs today, rounded down to a
+          # round number. Measured on this tarball: 96 tests executed under
+          # this job's exact invocation. Half is 48, so the floor is 45.
+          #
+          # Half, deliberately: the rejected `-lt 14` threshold sat at the
+          # exact count shipping that day, so deleting one test module failed
+          # the job with a packaging error for a deliberate source change.
+          # This one has ~51 tests of headroom -- you would have to delete more
+          # than half the suite before it complains, and no plausible refactor
+          # does that silently, while total deselection lands at 0 and trips it
+          # immediately.
+          FLOOR=45
+          EXECUTED="$(python - "${RUNNER_TEMP}/sdist-junit.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse(sys.argv[1]).getroot()
+          suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+          total = sum(int(s.get("tests", 0)) for s in suites)
+          skipped = sum(int(s.get("skipped", 0)) for s in suites)
+          # Deselected tests never appear in the report at all, so they are
+          # absent from `total` -- which is exactly what makes this catch them.
+          print(total - skipped)
+          PY
+          )"
+          echo "tests actually executed: ${EXECUTED}  (floor ${FLOOR})"
+          if [ "${EXECUTED}" -lt "${FLOOR}" ]; then
+            echo "::error::the sdist suite executed only ${EXECUTED} tests, below the floor of ${FLOOR}."
+            echo "::error::Shipping every test module is not the same as running them. Check for a"
+            echo "::error::marker change or an -m expression that deselected the suite. If the suite"
+            echo "::error::genuinely shrank by more than half, re-derive FLOOR from the new count."
+            exit 1
+          fi
+
   # 5. Publish to PyPI via OIDC Trusted Publisher. Needs all four gates green.
   #    This is the ONLY job with id-token: write, and it uses no API token.
   publish:
@@ -293,7 +407,7 @@ jobs:
       id-token: write
     steps:
       - name: Download dist artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
