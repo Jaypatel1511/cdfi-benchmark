@@ -149,6 +149,14 @@ def get_financials(
         "ASSET", "DEP", "LNLSNET", "NETINC",
         "INTINC", "EINTEXP", "NONII", "NONIX", "EQ",
         "RBC1AAJ", "RBCT1J", "LNLSGR", "NCLNLS", "LNATRES",
+        # FDIC's own published ratios — already annualized and over the correct
+        # average denominators, which is the basis the thresholds are
+        # calibrated to. Preferred over the hand-computed proxy; see
+        # InstitutionProfile.metric_basis.
+        "NIMY", "ROA", "ROE", "EEFFR",
+        # Amortization of intangibles + goodwill impairment: the EEFFR
+        # numerator subtraction the package omitted through 0.2.1.
+        "EAMINTAN",
     ]
 
     filters = f"CERT:{cert}"
@@ -209,6 +217,14 @@ def get_peer_financials(
         "ASSET", "DEP", "LNLSNET", "NETINC",
         "INTINC", "EINTEXP", "NONII", "NONIX", "EQ",
         "RBC1AAJ", "RBCT1J", "LNLSGR", "NCLNLS", "LNATRES",
+        # FDIC's own published ratios — already annualized and over the correct
+        # average denominators, which is the basis the thresholds are
+        # calibrated to. Preferred over the hand-computed proxy; see
+        # InstitutionProfile.metric_basis.
+        "NIMY", "ROA", "ROE", "EEFFR",
+        # Amortization of intangibles + goodwill impairment: the EEFFR
+        # numerator subtraction the package omitted through 0.2.1.
+        "EAMINTAN",
     ]
 
     filters = ["ASSET:[1 TO *]"]
@@ -341,4 +357,15 @@ def _parse_institution(row: dict) -> InstitutionProfile:
         gross_loans=_coerce_float(row, "LNLSGR", absent=None),
         non_current_loans=_coerce_float(row, "NCLNLS", absent=None),
         loan_loss_allowance=_coerce_float(row, "LNATRES", absent=None),
+        intangible_amortization=_coerce_float(row, "EAMINTAN", absent=None),
+        # FDIC-published ratios. Deliberately NOT ratio_class-bounded: unlike a
+        # leverage ratio these are not confined to [-100, 150]. An efficiency
+        # ratio above 150% is ordinary for a bank with thin revenue (FDIC
+        # published 104.08% for CERT 34352 at 20250630), and ROE runs
+        # arbitrarily negative as equity approaches zero. Bounding them would
+        # convert real values into FDICResponseError.
+        reported_nim=_coerce_float(row, "NIMY", absent=None),
+        reported_roaa=_coerce_float(row, "ROA", absent=None),
+        reported_roae=_coerce_float(row, "ROE", absent=None),
+        reported_efficiency_ratio=_coerce_float(row, "EEFFR", absent=None),
     )

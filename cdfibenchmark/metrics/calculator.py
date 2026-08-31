@@ -70,6 +70,11 @@ def benchmark_institution(
             peer_count=peer_count,
             unit=config.get("unit", "%"),
             lower_is_better=config.get("lower_is_better", False),
+            # How the institution's value was measured, and where the threshold
+            # it is compared against comes from. Both ride along to the render
+            # layer so no cell can show a grade without showing its warrant.
+            basis=institution.metric_basis(metric),
+            source=config.get("source"),
         ))
 
     return results
