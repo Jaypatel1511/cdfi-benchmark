@@ -145,6 +145,30 @@ wrong.
   the two groups. A shortfall below `min_peers` is disclosed, not silently
   returned.
 
+- **`rank_institution` contradicted `status`, and its percentile could never
+  reach 100.** Two defects found by executing the function across a value
+  range, which had never been done. Measured against a 20-peer group before the
+  fix:
+
+      L/D  15%  status=WEAK      rank=1/21   percentile=95.2
+      L/D  80%  status=STRONG    rank=13/21  percentile=38.1
+
+  A bank lending 15% of its deposits was graded WEAK and simultaneously placed
+  in the top 5% of its peer group **on the same metric** — the band defect
+  surviving in the percentile path after the `status` path was fixed. A banded
+  metric has no monotone better-direction, so it is now **not ranked at all**:
+  `rank` and `percentile` are `None` and a `reason` says why. Ordering it by
+  distance from the band would be a house construct stacked on already-house
+  boundaries.
+
+  Separately, `percentile` used `(1 - rank / N) * 100` over peers **plus** the
+  institution, so a best-possible value scored **95.2, never 100**, and the
+  worst was pinned at exactly 0. It is now the share of peers actually beaten
+  and spans the full range. `peer_count` counted the institution itself, so the
+  same key name meant peers-plus-one here and peers-only on `BenchmarkResult`;
+  it is now peers-only in both, and a new `rank_of` names the denominator
+  `rank` is out of.
+
 - **The report rendered grades without their warrant.** It printed the
   institution's report date and the peer group *size* and nothing else about the
   peer group. It now renders **Peer Report Date** (or `MIXED — <dates>`),

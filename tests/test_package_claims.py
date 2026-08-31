@@ -68,9 +68,34 @@ def _project_meta() -> dict:
             )
     return out
 
+#: Every surface these gates must be able to read. This module is a REPO gate,
+#: not an artifact gate: it runs in full against a checkout, or not at all.
+#:
+#: All-or-nothing on purpose. release.yml's test-sdist job runs the suite from a
+#: directory holding ONLY tests/ + README.md + pyproject.toml (deliberately no
+#: checkout, so the checkout cannot leak into the thing under test). A gate that
+#: merely skipped its unreadable surfaces would go GREEN there while scanning a
+#: fraction of what it scans locally — passing while checking less, which is the
+#: vacuity class release.yml exists to close. So: if any surface is absent, the
+#: whole module skips with a reason naming what was missing, and the assertions
+#: are made where they can actually be made (the ci.yml `test` job, which has a
+#: full checkout).
+_REQUIRED_SURFACES = {
+    "README.md": README,
+    "pyproject.toml": PYPROJECT,
+    "CHANGELOG.md": ROOT / "CHANGELOG.md",
+    "cdfibenchmark/": ROOT / "cdfibenchmark",
+    "examples/": ROOT / "examples",
+}
+_MISSING = sorted(n for n, path in _REQUIRED_SURFACES.items() if not path.exists())
+
 pytestmark = pytest.mark.skipif(
-    not README.exists() or not PYPROJECT.exists(),
-    reason="repo-root docs not present (installed-wheel run)",
+    bool(_MISSING),
+    reason=(
+        "repo-root surfaces absent, so these gates cannot run in full: "
+        + ", ".join(_MISSING)
+        + " (expected in an installed-artifact run; they run in the `test` job)"
+    ),
 )
 
 #: Claims retired in earlier releases. None may reappear on ANY shipped surface.
@@ -90,14 +115,16 @@ def _shipped_text():
     """
     out = {}
     for p in [README, PYPROJECT, ROOT / "CHANGELOG.md"]:
-        if p.exists():
-            out[p.name] = p.read_text()
+        # Not `if p.exists()`. The module-level skipif already guaranteed these
+        # are here; a silent skip at THIS level would shrink the scan surface
+        # without shrinking the pass.
+        out[p.name] = p.read_text()
     for sub, pattern in (("cdfibenchmark", "*.py"), ("tests", "*.py"),
                          ("examples", "*.ipynb")):
         d = ROOT / sub
-        if d.exists():
-            for p in sorted(d.rglob(pattern)):
-                out[str(p.relative_to(ROOT))] = p.read_text()
+        assert d.exists(), f"expected surface {sub} is missing"
+        for p in sorted(d.rglob(pattern)):
+            out[str(p.relative_to(ROOT))] = p.read_text()
     return out
 
 
