@@ -45,7 +45,7 @@ def _peer(cert, repdte="20260331", state="CA", assets=655_000):
 
 @pytest.fixture
 def inst():
-    return _peer(57542, repdte="20260331")
+    return _peer(99001, repdte="20260331")
 
 
 # ── B4: the peer query must be PINNED to the institution's period ────────────

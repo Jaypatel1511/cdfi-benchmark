@@ -7,6 +7,219 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > History prior to 0.2.0 predates this changelog and is not documented here.
 
+## [0.3.0] - 2026-08-30
+
+Grading-direction, period-basis and peer-composition corrections. Every fix
+below changes a value or a grade the package displayed. Where an earlier
+release was wrong, this says so plainly so downstream users can re-check
+conclusions drawn from it.
+
+**Anyone who ran 0.2.x should re-run.** Grades change for `loans_to_deposits`
+(direction), `efficiency_ratio` (numerator), `nim`/`roaa`/`roae` (basis), and
+every peer median and percentile changes because the peer group itself was
+wrong.
+
+### Fixed
+
+- **`loans_to_deposits` was graded backwards (B1).** The entry carried no
+  `lower_is_better`, so `BenchmarkResult.status` took the `>=` branch: a bank
+  lending **200% of its deposits graded STRONG** and one at **55% graded WEAK**,
+  inverted against the README's own `<= 80%` row. Live on PyPI since at least
+  0.2.0. `rank_institution` reads the same flag, so the **percentile was
+  inverted too**.
+
+  The direction flag alone is *not* the whole fix: it grades 20% STRONG, and a
+  CDFI bank lending 20% of deposits is not deploying capital into its
+  community. The risk is two-sided, so the metric is now graded as a **band**
+  via a new optional `floor` key: `20 -> WEAK`, `55 -> STRONG`, `80 -> STRONG`,
+  `95 -> ADEQUATE`, `130 -> WEAK`, `200 -> WEAK`.
+
+  The direction of **all eight** metrics was then executed across the
+  missing/NaN/zero/negative/absurd range. `loans_to_deposits` was the only
+  inverted one; `reserve_coverage` (higher-is-better with `good` 100 >
+  `warning` 50) and `tier1_ratio` are correct as they stand.
+
+- **Every threshold now declares its provenance.** `tier1_ratio` was the only
+  entry with a citation and it lived in a *comment*, where nothing could render
+  or check it, while seven unsourced thresholds rendered beside it in the same
+  `Benchmark:` column of the same report. Each entry now carries a
+  machine-readable `source`; the seven are marked `"HOUSE"`, their numbers come
+  from `HOUSE_`-prefixed constants, and the report renders them as *"this
+  tool's own threshold (HOUSE), not a regulatory or supervisory standard"*.
+
+  Ruling on the 80/95 loans-to-deposits boundary the brief asked for: it is a
+  **house number and is now labelled as one**. There is no regulatory
+  loans-to-deposits level — bank capital has published levels, funding ratios do
+  not. No citation was invented.
+
+  Calibration, measured not asserted: across the 50 real peers of CERT 34352 at
+  `20260630`, seven metrics grade sensibly (majority STRONG, small WEAK tail)
+  while `loans_to_deposits` grades **22 of 50 WEAK with a peer median of 91.12%
+  inside the WEAK zone**. The boundaries are kept because they are what the
+  README documents and are marked HOUSE; fitting them to a 50-bank sample would
+  invent a number with a veneer of evidence. Recorded so a later release can
+  recalibrate deliberately.
+
+- **`nim`, `roaa` and `roae` divided YTD flows by point-in-time stocks and
+  graded the result against annual thresholds (B2).** `INTINC`, `EINTEXP` and
+  `NETINC` are year-to-date; at a Q1 `REPDTE` they cover three months. Measured
+  against FDIC's own published series for CERT 34352 at `20260331`: computed
+  values read **4.30x / 4.12x / 4.01x low**. A healthy bank graded WEAK for
+  three quarters of every year.
+
+  **Route taken — a fourth the brief did not list.** The FDIC `/financials`
+  endpoint already publishes `NIMY`, `ROA`, `ROE` and `EEFFR`, already
+  annualized and already over the correct *average* denominators, which is the
+  basis the thresholds are calibrated to. These are now fetched and preferred.
+  That is a **measurement, not an estimate** — no annualized figure is invented,
+  and it resolves the period error, the denominator error and the labelling
+  error in one move.
+
+  When a published ratio is absent (a hand-built profile, or a field the API
+  omitted) the computed proxy is kept, its **basis is rendered**, and it is
+  **not graded** (`GRADEABLE_BASES`). Degrade the cell, not the number: the
+  measured value is still reported, with an explicit `Not graded:` line.
+
+- **NIM's denominator was total assets, and still is in the fallback (B2b).**
+  FDIC's `NIMY` — and the 3.5% threshold calibrated to it — is over average
+  *earning* assets, a strictly smaller denominator, so the computed proxy is
+  biased low **even at Q4** (1.09x residual measured at `20251231`). Ruling: the
+  computed NIM is **never graded at any period**, and renders as "Net Interest
+  Margin over total assets (NIM)". Only FDIC's published `NIMY` is graded.
+
+- **"Return on *Average* Assets/Equity" was computed on period-end balances
+  (B2c).** A third labelling defect, independent of period and denominator. The
+  averaged label is now used only when the value is FDIC's published `ROA`/`ROE`;
+  the computed fallback renders "Return on Assets, period-end (ROAA)" and is
+  graded only at a Q4 `REPDTE`, where the flow covers the full year.
+
+- **`efficiency_ratio` did not match FDIC `EEFFR`, though its own comment said
+  it did.** 0.2.1 corrected the denominator and left the numerator wrong: FDIC
+  subtracts amortization of intangibles and goodwill-impairment losses
+  (`EAMINTAN`) from noninterest expense. Verified against the live API for CERT
+  34352 at five `REPDTE`s —
+
+      EEFFR = (NONIX - EAMINTAN) / ((INTINC - EINTEXP) + NONII) * 100
+
+  reproduces FDIC's published figure to **1e-9** at every one. The old formula
+  read **191.06% where FDIC published 88.33%** (`20250930`, a goodwill-impairment
+  quarter) — enough to move a bank from ADEQUATE to WEAK. `EAMINTAN` absent
+  subtracts nothing; no figure is fabricated.
+
+  **`efficiency_ratio` is period-neutral and is NOT annualized.** Numerator and
+  denominator are YTD flows over the same period, so the period cancels exactly;
+  annualizing it would introduce an error where there is none. Stated here so
+  the next reader does not "complete" the B2 fix.
+
+- **Peer groups were not pinned to a reporting period, and were mostly
+  duplicates (B4).** `build_peer_group` never defaulted `report_date`, so
+  `get_peer_financials` sent **no `REPDTE` filter at all**. The `/financials`
+  endpoint is one row per institution-*quarter* (its own `ID` is
+  `"<CERT>_<REPDTE>"`). Running the exact query the code built, 2026-08-30:
+
+      before:  55 rows, 8 distinct CERTs, REPDTE 20030930..20260630,
+               one CERT appearing 17 times
+      after:   50 rows, 50 distinct CERTs, all at 20260630
+
+  A "50-peer group" was **8 banks counted up to 17 times each across 23 years**,
+  and the peer median, quartiles and percentile were computed over that — while
+  the institution itself came from `get_financials` sorted `REPDTE DESC`, at its
+  most recent quarter. This also compounded B2: a Q1 institution against Q4
+  peers is a factor of four before any real difference in performance.
+  `report_date` now defaults to the institution's own, and `_dedupe_by_cert`
+  keeps the row nearest the target period as a defence that does not depend on
+  the API honouring the filter.
+
+- **The `same_state` fallback silently returned a different peer group (B3).**
+  Three defects at one site: the caller asked for same-state peers and got a
+  **national** group with nothing on the result or the report saying so; the
+  fallback **overwrote** rather than supplemented, so an 8-peer same-state group
+  could be replaced by a 3-peer national one **or by `[]`**; and `min_peers`
+  read as a floor while only ever being a trigger. The comment said *"widen the
+  asset range"* while the code widened the **geography**.
+
+  `build_peer_group` now returns `PeerGroup` (a `list` subclass, so every
+  existing consumer is unchanged) carrying `requested_state`,
+  `state_constraint_dropped`, `min_peers`/`below_min_peers`, `report_dates`,
+  `is_single_period` and a `caveats` list. The fallback keeps the **better** of
+  the two groups. A shortfall below `min_peers` is disclosed, not silently
+  returned.
+
+- **The report rendered grades without their warrant.** It printed the
+  institution's report date and the peer group *size* and nothing else about the
+  peer group. It now renders **Peer Report Date** (or `MIXED — <dates>`),
+  **Distinct Institutions**, a **Peer group caveats** block before any number,
+  a **Basis:** line per metric, threshold provenance inline, and a **Not
+  graded:** line explaining any present-but-ungraded value. `summary_table`
+  gains `basis` and `threshold_source` columns.
+
+- **`FDIC_API_BASE` pointed at a redirect.** `banks.data.fdic.gov/api` now
+  answers HTTP 301 to `api.fdic.gov/banks`. `requests` follows it, so calls
+  still succeeded — which is why this went unnoticed — at the cost of an extra
+  round trip per call and a dependency on a redirect the FDIC is free to retire.
+  Now calls the canonical host.
+
+- **The README's Quickstart named the wrong bank, and it was a LIVE call.**
+  It read *"Pull call report data for Broadway Federal Bank (CERT 57542)"*.
+  **CERT 57542 is Toyota Financial Savings Bank**, Henderson NV, $16.8B —
+  verified against the live FDIC `/institutions` endpoint. Broadway Federal is
+  CERT 30306 and is inactive. This is worse than a sample-data problem: the
+  block runs, succeeds, and prints a real, correctly-computed, graded report
+  about an entirely different bank from the one named beside it. The same
+  binding was in `tests/conftest.py` and, most emphatically, in the demo
+  notebook, which attributed *"one of the largest Black-owned banks"* to it.
+  All surfaces corrected; the Quickstart now uses CERT 34352 (City First Bank,
+  N.A., a real CDFI/MDI) and every fixture uses a synthetic cert outside the
+  FDIC's issued range.
+
+- **The README's sample block attached invented financials to a real named
+  institution** with no synthetic warning. It is now an unmistakably fictional
+  bank with an explicit banner.
+
+- **`build_sample_peer_group` seeded the GLOBAL RNG.** `random.seed(42)` reset
+  the caller's process-wide random state as a side effect of building a sample
+  peer group. Now uses a local `random.Random(42)`.
+
+- **`pyproject.toml` still advertised CET1** in `description` — the text PyPI
+  renders *above* the corrected README. 0.2.1 removed the claim everywhere else
+  and left it here. Removed.
+
+- **README corrections:** period-basis disclosure added (there was none — zero
+  occurrences of "annualiz" or "YTD"); threshold provenance table added; the
+  hand-typed "96 tests" count removed; the "CDFI banks and credit unions"
+  audience line corrected, since credit unions are NCUA-regulated and are
+  covered by neither this API nor this tool.
+
+### Added
+
+- `InstitutionProfile.fiscal_quarter`, `.metric_basis()`, `.basis_dict()`, and
+  the fields `reported_nim`, `reported_roaa`, `reported_roae`,
+  `reported_efficiency_ratio`, `intangible_amortization`.
+- `BenchmarkResult.basis` and `.source`. A basis outside `GRADEABLE_BASES`
+  degrades `status` to `N/A` while still reporting the value.
+- `PeerGroup`, with `.caveats`, `.report_dates`, `.is_single_period`,
+  `.below_min_peers`.
+- `BENCHMARKS` entries gain `source` and, for banded metrics, `floor`.
+- New gates, each run RED before the fix it covers:
+  `tests/test_grading_direction.py`, `tests/test_threshold_attribution.py`,
+  `tests/test_metric_basis.py`, `tests/test_basis_wiring.py`,
+  `tests/test_peer_group_integrity.py`, `tests/test_report_disclosure.py`,
+  `tests/test_package_claims.py`. The loans-to-deposits band gate was
+  additionally proven to fail against the *naive* one-sided remedy, not only
+  against the shipped bug.
+
+### Refuted
+
+- **`npl_ratio` does not need "fixing" to match FDIC `NPERFV`.** `NPERFV` is
+  noncurrent loans over **ASSETS** (verified exactly at five `REPDTE`s), not
+  over loans. The package's `NCLNLS / LNLSGR` is a different, standard, and
+  period-neutral metric. Left unchanged deliberately.
+
+### Version
+
+Minor bump, not a patch: returned grades change, `build_peer_group` returns a
+new type, and `InstitutionProfile` / `BenchmarkResult` gain fields.
+
 ## [0.2.1] - 2026-07-09
 
 Field-semantics corrections. Every fix below changes a value the package

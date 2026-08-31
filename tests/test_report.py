@@ -111,7 +111,7 @@ def test_zero_assets_render_zero_mm():
     from cdfibenchmark.peers.selector import build_sample_peer_group
 
     inst = InstitutionProfile(
-        cert=57544, name="Zero Asset Bank", city="LA", state="CA",
+        cert=99003, name="Zero Asset Bank (SYNTHETIC)", city="LA", state="CA",
         report_date="20241231",
         total_assets=0, total_deposits=0, net_loans=0, net_income=0,
         interest_income=0, interest_expense=0, non_interest_income=0,

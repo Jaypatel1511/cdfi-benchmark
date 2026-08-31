@@ -3,8 +3,8 @@ from cdfibenchmark.data.schema import InstitutionProfile, BenchmarkResult
 
 
 def test_institution_created(sample_institution):
-    assert sample_institution.name == "Broadway Federal Bank"
-    assert sample_institution.cert == 57542
+    assert sample_institution.name == "Riverstone Community Bank (SYNTHETIC)"
+    assert sample_institution.cert == 99001
 
 
 def test_total_assets_mm(sample_institution):

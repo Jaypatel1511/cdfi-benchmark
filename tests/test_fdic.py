@@ -47,7 +47,7 @@ def _response(payload=None, *, raise_status=None, json_exc=None):
 # exactly what makes the wrong-field-class guard (D1b) testable — a regression
 # that remaps RBCT1J into the ratio slot trips the [-100, 150] plausibility bound.
 WELL_FORMED_ROW = {
-    "CERT": 57542,
+    "CERT": 99001,
     "NAME": "Broadway Federal Bank",
     "CITY": "Los Angeles",
     "STALP": "CA",
@@ -75,9 +75,9 @@ MALFORMED = {"data": "oops"}   # valid JSON, wrong shape (data is not a list of 
 
 # Every (op, callable) pair plus the context token its messages must name.
 ALL_FETCHERS = [
-    ("get_institution", lambda: fdic.get_institution(57542), "57542"),
+    ("get_institution", lambda: fdic.get_institution(99001), "99001"),
     ("search_institutions", lambda: fdic.search_institutions(state="CA"), "CA"),
-    ("get_financials", lambda: fdic.get_financials(57542), "57542"),
+    ("get_financials", lambda: fdic.get_financials(99001), "99001"),
     ("get_peer_financials", lambda: fdic.get_peer_financials(state="CA"), "CA"),
 ]
 
@@ -131,7 +131,7 @@ def test_non_numeric_cert_raises_response_error():
     payload = {"data": [{"data": {"CERT": "not-a-number", "NAME": "X"}}]}
     with patch.object(fdic.requests, "get", return_value=_response(payload)) as mock_get:
         with pytest.raises(FDICResponseError):
-            fdic.get_financials(57542)
+            fdic.get_financials(99001)
     assert mock_get.called
     with patch.object(fdic.requests, "get", return_value=_response(payload)) as mock_get:
         with pytest.raises(FDICResponseError):
@@ -142,13 +142,13 @@ def test_non_numeric_cert_raises_response_error():
 # ── (c) legitimate empty (200, {"data": []}) → empty, NOT a raise ─────────────
 def test_get_institution_empty_returns_none():
     with patch.object(fdic.requests, "get", return_value=_response(EMPTY)) as mock_get:
-        assert fdic.get_institution(57542) is None
+        assert fdic.get_institution(99001) is None
     assert mock_get.called
 
 
 def test_get_financials_empty_returns_none():
     with patch.object(fdic.requests, "get", return_value=_response(EMPTY)) as mock_get:
-        assert fdic.get_financials(57542) is None
+        assert fdic.get_financials(99001) is None
     assert mock_get.called
 
 
@@ -169,17 +169,17 @@ def test_get_peer_financials_empty_returns_empty_list():
 # ── (d) happy path (200, one well-formed record) ──────────────────────────────
 def test_get_financials_happy_path_parses_to_profile():
     with patch.object(fdic.requests, "get", return_value=_response(ONE_RECORD)) as mock_get:
-        profile = fdic.get_financials(57542)
+        profile = fdic.get_financials(99001)
     assert isinstance(profile, InstitutionProfile)
-    assert profile.cert == 57542
+    assert profile.cert == 99001
     assert profile.name == "Broadway Federal Bank"
     assert mock_get.called
 
 
 def test_get_institution_happy_path_returns_record():
     with patch.object(fdic.requests, "get", return_value=_response(ONE_RECORD)) as mock_get:
-        record = fdic.get_institution(57542)
-    assert record["CERT"] == 57542
+        record = fdic.get_institution(99001)
+    assert record["CERT"] == 99001
     assert mock_get.called
 
 
@@ -188,7 +188,7 @@ def test_search_institutions_happy_path_returns_dataframe():
         df = fdic.search_institutions(state="CA")
     assert isinstance(df, pd.DataFrame)
     assert not df.empty
-    assert df.iloc[0]["CERT"] == 57542
+    assert df.iloc[0]["CERT"] == 99001
     assert mock_get.called
 
 
@@ -198,7 +198,7 @@ def test_get_peer_financials_happy_path_returns_profiles():
     assert isinstance(peers, list)
     assert len(peers) == 1
     assert isinstance(peers[0], InstitutionProfile)
-    assert peers[0].cert == 57542
+    assert peers[0].cert == 99001
     assert mock_get.called
 
 
@@ -219,14 +219,14 @@ def _wrap(record):
 # Both fetchers that push a record through _parse_institution. A malformed
 # record must raise out of BOTH (peer batch fails loud on a bad record too).
 PARSE_CALLS = [
-    ("get_financials", lambda: fdic.get_financials(57542)),
+    ("get_financials", lambda: fdic.get_financials(99001)),
     ("get_peer_financials", lambda: fdic.get_peer_financials(state="CA")),
 ]
 
 # Same two fetchers, but unwrapped to a single InstitutionProfile so the
 # parses-but-sparse cases can assert on field values.
 PARSE_PROFILE = [
-    ("get_financials", lambda: fdic.get_financials(57542)),
+    ("get_financials", lambda: fdic.get_financials(99001)),
     ("get_peer_financials", lambda: fdic.get_peer_financials(state="CA")[0]),
 ]
 
