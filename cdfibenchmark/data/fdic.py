@@ -191,12 +191,21 @@ def get_financials(
     return _parse_institution(row)
 
 
+#: Hard cap the FDIC /financials endpoint enforces on `limit`. Measured
+#: 2026-09-05: limit=10000 returns 200; limit=20000 returns HTTP 400
+#: ``validate:too_big`` — "Number must be less than or equal to 10000".
+#: A caller that needs the WHOLE result set must therefore check whether the
+#: row count came back at the cap, because the endpoint truncates silently.
+FDIC_MAX_LIMIT = 10_000
+
+
 def get_peer_financials(
     state: str = None,
     min_assets: int = None,
     max_assets: int = None,
     report_date: str = None,
     limit: int = 100,
+    sort_order: str = "DESC",
 ) -> list:
     """
     Fetch call report financials for a group of peer institutions.
@@ -206,7 +215,12 @@ def get_peer_financials(
         min_assets:  Minimum assets in thousands
         max_assets:  Maximum assets in thousands
         report_date: Report date e.g. "20241231"
-        limit:       Maximum number of institutions
+        limit:       Maximum number of institutions. The endpoint caps this at
+                     FDIC_MAX_LIMIT and truncates in `sort_order` order without
+                     saying so — see build_peer_group, which fetches the whole
+                     asset window rather than a sorted slice of it.
+        sort_order:  "ASC" or "DESC" over ASSET. Both are accepted by the
+                     endpoint (measured 2026-09-05).
 
     Returns:
         List of InstitutionProfile objects
@@ -243,7 +257,7 @@ def get_peer_financials(
         "fields": ",".join(fields),
         "limit": limit,
         "sort_by": "ASSET",
-        "sort_order": "DESC",
+        "sort_order": sort_order,
         "format": "json",
     }
 
@@ -271,13 +285,36 @@ def get_peer_financials(
         ) from e
 
 
-# Plausibility bound for percentage/ratio-class fields. A leverage or capital
-# ratio lives in roughly [-100, 150]; a value outside that band is a dollar
-# amount that has been mapped into a ratio slot (wrong field class or FDIC API
-# drift), not a real percentage. Dollar-class fields (assets, loans, capital in
-# thousands) legitimately exceed this and must NOT be bounded.
+# Plausibility bound for percentage/ratio-class fields. This is a GROSS
+# field-class drift guard — a Tier 1 CAPITAL figure ($k, up to 302,589,000 at
+# 20260630) landing in the Tier 1 LEVERAGE RATIO slot — and nothing finer.
+#
+# The bound was [-100, 150] through 0.3.0 and that was too tight for a real
+# leverage ratio. RBC1AAJ is Tier 1 capital over AVERAGE assets, so a de novo
+# bank (whose average assets trail its period-end assets) or one in wind-down
+# holding almost all equity can exceed 100% legitimately. Measured across six
+# quarters, every active FDIC filer:
+#
+#   REPDTE     n     max RBC1AAJ    over 150
+#   20260630   4313     277.16         2   <- CORNERSTONE COMMUNITY BANK (EQ/ASSET 55.3%)
+#   20260331   4353     142.22         0      FIRST CITY BANK           (EQ/ASSET 94.5%)
+#   20251231   4411     119.35         0
+#   20250630   4494     117.29         0
+#   20241231   4560     117.66         0
+#   20231231   4658     105.01         0
+#
+# 150 fit five of six quarters by luck and raised FDICResponseError on two real
+# banks in the sixth, aborting the whole peer group. 1000 admits every observed
+# leverage ratio with room, and still catches the drift the guard is for.
+#
+# What this guard CANNOT do, stated because the old comment claimed otherwise:
+# it cannot separate the field classes at the SMALL end. RBCT1J is as low as
+# $62k for a tiny filer, which sits squarely inside the ratio band — so a
+# dollar figure from a small institution mapped into a ratio slot passes this
+# check. The field NAME is the real protection; this is defence in depth
+# against a large-magnitude swap only.
 _RATIO_MIN = -100.0
-_RATIO_MAX = 150.0
+_RATIO_MAX = 1000.0
 
 
 def _coerce_float(row: dict, key: str, *, absent, ratio_class: bool = False):

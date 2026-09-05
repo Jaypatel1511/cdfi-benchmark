@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > History prior to 0.2.0 predates this changelog and is not documented here.
 
-## [0.3.0] - 2026-08-30
+## [0.3.0] - 2026-09-05
 
 Grading-direction, period-basis and peer-composition corrections. Every fix
 below changes a value or a grade the package displayed. Where an earlier
@@ -17,9 +17,210 @@ conclusions drawn from it.
 **Anyone who ran 0.2.x should re-run.** Grades change for `loans_to_deposits`
 (direction), `efficiency_ratio` (numerator), `nim`/`roaa`/`roae` (basis), and
 every peer median and percentile changes because the peer group itself was
-wrong.
+wrong — twice over: the group was pinned to one period AND reselected by
+proximity rather than by size.
 
-### Fixed
+### Fixed (second pass, after a hostile audit and before any release)
+
+- **The peer group was the 50 LARGEST banks in the asset window, at every size
+  (B1).** `get_peer_financials` sent `sort_by=ASSET, sort_order=DESC,
+  limit=max_peers+5` and `build_peer_group` kept `[:50]`. The sort predates this
+  release; what this release did was PIN the REPDTE, which made all 55 rows
+  distinct institutions at one date — so the group became exactly the 50 largest
+  in the window. Executed against the live API at REPDTE 20260630:
+
+      CERT 34352, assets $1562.0MM, window $781.0MM-$2343.0MM
+        banks actually in the window:  764
+        peer group n=50   asset range  $2119.3MM-$2341.3MM
+        -> the subject sat at percentile 0 of its own peer group
+        -> PeerGroup.caveats was EMPTY
+
+      swept at 20260630 over subjects $75MM / $150MM / $400MM / $1,000MM /
+      $1,562MM / $5,000MM: EVERY peer larger than the subject at every size,
+      smallest peer 1.15x-1.45x the subject's own assets.
+
+  Pinning the period converted a LOUD defect (55 rows, 8 certs, 23 years) into a
+  quiet one, and the README then presented the result as "the 50 real peers of
+  CERT 34352". `PeerGroup.caveats` disclosed a dropped state constraint, a short
+  group and a mixed period, and said nothing about the one basis that skewed
+  every number on the page.
+
+  **Route taken, and why not the two-bounded-query design the brief
+  recommended.** Probed first: `sort_order=ASC` IS accepted; `limit` caps at
+  10,000 (`limit=20000` -> HTTP 400 `validate:too_big`); `offset` works. And the
+  widest +/-50% window anywhere in the CDFI size range holds **1,439** banks
+  (measured at 20260630 across subjects from $25MM to $25,000MM), so the whole
+  window fits in ONE query — the brief's premise that paging the window is "more
+  expensive" than two bounded queries is false here. `build_peer_group` now
+  fetches the complete window in a single call (764 rows, 341 KiB, 0.88s for the
+  subject) and keeps the `max_peers` banks NEAREST the subject by
+  `|assets - subject|`, ties broken on CERT. One round trip instead of two,
+  exact instead of nearly exact, and it yields the window's true population.
+
+  After the fix, same sweep: subject asset percentile **40-70** at every size
+  (was 0), peer range brackets the subject everywhere.
+
+  **What this selection gets wrong.** A nearest-neighbour group is not a random
+  sample of the window and is not a supervisory peer group. Where the window is
+  dense near the subject the group is NARROWER than "peers" suggests — for CERT
+  34352 the 50 nearest span $1,499.9MM-$1,621.7MM, about +/-4%, drawn from a
+  window of +/-50%. That is a tighter comparison than the asset tolerance
+  advertises, and it trades the old size bias for a size *concentration*. The
+  report now states the window, the group size, the selection rule and the
+  subject's position, so the reader can see this rather than infer it.
+
+- **The peer-selection parameters were unnamed house numbers.** The +/-50%
+  window, the 50-bank cap and the 10-peer floor decide WHICH BANKS the report
+  compares against and were bare literals in a signature. They are now
+  `HOUSE_ASSET_TOLERANCE` / `HOUSE_MAX_PEERS` / `HOUSE_MIN_PEERS` and are
+  rendered on the report as `PeerGroup.selection_basis`, which states that they
+  are this tool's own and that the FDIC's UBPR peer groups are a different
+  construct.
+
+- **The report showed a peer asset range and never said where the institution
+  fell inside it.** `**Peer Asset Range:** $2119.3MM - $2341.3MM` printed two
+  lines under `**Total Assets:** $1562.0MM` with no relationship stated is what
+  let a size-skewed group read as a peer group. The report now renders the
+  subject's percentile within its own peer group, and a group in which the
+  subject sits at an extreme is caveated.
+
+- **A calibration note in the README stated a falsehood about the tool's own
+  output (B2).** `README.md` claimed "this band grades 22 of 50 WEAK, with a
+  peer median of 91.12% sitting inside the WEAK zone". The counts were exact;
+  the zone claim was **false** — the band is WEAK below 50 or above 95, and
+  91.12 satisfies `80 < v <= 95` -> **ADEQUATE**. The same sentence had been
+  copied into this changelog, so it shipped in two places.
+
+  Re-measured over the corrected peer group (the numbers described a cohort
+  ~1.4x the subject's size and did not survive B1): **13 of 50 WEAK, 11 of them
+  for exceeding 95%, peer median 85.19% -> ADEQUATE**. The corrected sentence
+  does the disclosure work better than the false one: the WEAK tail is almost
+  entirely the funding-strain edge, which is what the band was added to catch.
+
+- **FDIC's zero-fill was graded as a measurement on the gradeable basis, and
+  read STRONG (B3).** FDIC publishes a literal `0` where it did not compute a
+  ratio. `_coerce_float(row, "EEFFR", absent=None)` correctly preserves a
+  present `0.0` — `_is_missing` is intact and was never the defect. The fill
+  arrives from FDIC already fabricated, and the `reported_*` short-circuit had
+  no missing-value discipline of its own: `is not None` was true, so
+  `metric_basis` returned `BASIS_FDIC` (gradeable), and because
+  `efficiency_ratio` is `lower_is_better`, `0.0 <= 60` graded **STRONG**.
+
+  Measured over all 4,313 active filers at REPDTE 20260630: EEFFR == 0 for 19
+  (0.44%), NIMY == 0 for 22, ROA == 0 for 17. Two are real operating US banks
+  inside the CDFI size band, and both rendered `Efficiency Ratio | 0.00% |
+  STRONG`:
+
+      CERT 33492 CRESCENT BANK         ASSET $1,065,126k  NIMY  4.481  ROA  8.336
+      CERT 12013 UNION COUNTY SAVINGS  ASSET $1,478,885k  NIMY -0.368  ROA -1.450
+
+  **The rule adopted, and why not the one the brief recommended.** The brief
+  proposed trusting a published ratio only when the core financials it derives
+  from are present, and asserted that this "happens to catch exactly the 19".
+  It does not: **17** of the 19 are foreign branches whose `INTINC`/`NONIX` are
+  absent, and the other **2 are exactly CERT 33492 and CERT 12013** — the two
+  operating banks that make this a blocker. That rule misses the dangerous
+  cases. A second test was needed:
+
+    (a) UNVERIFIABLE  an input the ratio derives from is absent  -> 17 of 19
+    (b) CONTRADICTED  a published 0 beside a non-zero numerator  -> the other 2
+
+  (b) is not a magic-zero rule. A ratio is zero if and only if its numerator is
+  zero, so a zero the financials SUPPORT is trusted — a break-even bank
+  publishing `ROA == 0` with `NETINC == 0` keeps it, which is why "ROA == 0.00
+  is plausible" does not defeat the rule. The zero is a fill rather than a
+  rounding artifact because FDIC publishes full precision: the smallest non-zero
+  magnitudes at 20260630 are 0.0373 (NIMY), 0.0118 (ROA) and 0.1494 (EEFFR).
+  Both rejected banks turn out to have NEGATIVE revenue, which is precisely when
+  FDIC declines to compute an efficiency ratio.
+
+  Applied to all four `reported_*` fields, not the one that was noticed. A
+  rejected value falls back to the computed proxy and renders that proxy's
+  basis, through the existing machinery — no new path. Measured cost over the
+  whole population: **zero** wrongful rejections (4,294 of 4,313 banks keep
+  their published efficiency ratio; no row anywhere has an absent numerator
+  input together with a non-zero published value).
+
+  **What this rule gets wrong** is recorded on
+  `InstitutionProfile.reported_is_trustworthy`: a non-zero sentinel passes; a
+  filer with complete financials and a fabricated non-zero ratio passes; test
+  (a) is stricter than "the value is wrong" and would degrade cells to N/A
+  rather than fail loud if FDIC dropped a field; and it says nothing about the
+  DENOMINATOR, so a bank with negative equity keeps a meaningless ROE.
+
+- **The ratio-class plausibility bound rejected real leverage ratios.**
+  `_RATIO_MAX` was 150. `RBC1AAJ` is Tier 1 capital over AVERAGE assets, so a de
+  novo bank or one in wind-down legitimately exceeds 100%. Measured across six
+  quarters over every active filer, the maximum was 105.01 / 117.66 / 117.29 /
+  119.35 / 142.22 / **277.16** — 150 fit five quarters by luck and raised
+  `FDICResponseError` on two real banks in the sixth (CERT 59379, equity 55.3%
+  of assets; CERT 16281, 94.5%). This was unreachable while the peer query
+  returned only the 55 largest banks in the window; fetching the whole window
+  reaches them, and one such bank aborted the ENTIRE peer group — for subjects
+  in the $25MM-$75MM range, squarely the CDFI size band. Bound widened to 1,000,
+  which still catches the four-orders-of-magnitude swap the guard exists for
+  (`RBCT1J` reaches 302,589,000). The comment claiming the guard separates the
+  field classes has been corrected: `RBCT1J` is as low as $62k for a small
+  filer, well inside the ratio band, so it cannot.
+
+- **The threshold-attribution gate could not see what its own docstring
+  claimed.** `test_house_thresholds_are_named_house_at_the_constant` states that
+  a HOUSE threshold's numbers must come from `HOUSE_`-prefixed constants, then
+  asserted `cfg[key] in house_values` — a set of VALUES. Replacing
+  `HOUSE_ROAA_GOOD, HOUSE_ROAA_WARNING` with bare `1.0, 0.5` left the suite at
+  **199 passed, 2 skipped**. Any literal equal to any HOUSE_ constant passed.
+  Now asserted by AST over the source (`ast.walk`, not `.body`): each
+  `good`/`warning`/`floor` node on a HOUSE entry must be a `Name` starting with
+  `HOUSE_`, never a `Constant`. A companion gate additionally requires the
+  constant to belong to ITS metric, closing a hole the prefix check alone left:
+  `"roaa": {"good": HOUSE_NPL_GOOD}` is HOUSE_-prefixed and numerically
+  identical (both 1.0), and would otherwise have graded return-on-assets against
+  an asset-quality rule of thumb.
+
+### Known limitations — carried forward, not fixed in this release
+
+Recorded so the next round has a list rather than a search. Each is real; none
+blocks this release.
+
+1. **The peer median can mix bases.** `compute_peer_metrics` has no basis
+   awareness: peer values enter `median()`/`quantile()` straight from
+   `metrics_dict()`, and `BenchmarkResult.basis` carries the INSTITUTION's basis
+   only. A median across two bases is a fabricated statistic even when every
+   input is correct. Live frequency is low but non-zero, and B3 RAISES it
+   slightly: rejected published ratios now fall back to a computed proxy, so a
+   peer group containing one of the 19 zero-fill banks contributes a
+   computed-basis value to an otherwise FDIC-basis median. Bounded — at most 19
+   of 4,313 banks at 20260630, and the rejected efficiency values render None
+   and drop out of the median entirely rather than entering it on a second
+   basis.
+2. **`_metric_label` applies the institution's basis to the whole row**,
+   including the peer median and quartile columns. Same shape as (1), on the
+   rendered face.
+3. **No upper bound on a metric that lands absurd**, and this is NOT only a
+   computed-metric problem as previously recorded. `reserve_coverage` 1e9% ->
+   STRONG and `nim` 140 -> STRONG are computed, but FDIC *publishes* values that
+   grade absurdly too: at 20260630 `EEFFR = -700` for CERT 58216 (BMO HARRIS
+   CENTRAL NA) and `-5.615` for CERT 58590 (NANO BANC) — both grade **STRONG**
+   because `efficiency_ratio` is `lower_is_better`. These are NOT sentinels and
+   B3 deliberately does not touch them: they are FDIC's own correct arithmetic
+   over a NEGATIVE noninterest expense, reproducible from the filed financials
+   to 0.01 (`-28/4*100 = -700`). Grading a negative efficiency ratio STRONG is
+   still wrong. This needs a ruling on what a grade means when the input is real
+   but the comparison is not, not a clamp.
+4. **`ASSET_BUCKETS` is an undisclosed house construct that renders on the
+   report.** The five boundaries (50MM / 250MM / 1B / 5B) are this tool's own,
+   exactly like the peer-selection parameters this release named, and the report
+   prints `**Asset Bucket:** Large` with no attribution. It is descriptive only
+   — no grade, threshold or peer-selection decision reads it — which is why it
+   is recorded rather than fixed. It is the last member of the "unnamed house
+   constant on the rendered face" family that this release did not close.
+5. **`docs-check` is not adopted here. Ruled: not this release.** Three blockers
+   was enough scope, and `docs-check` reads the README, which B1 and B2 both
+   rewrote. It rides the next release. This is a decision, not an omission.
+
+### Fixed (first pass)
+
+The rest of this release, in the order it was built.
 
 - **`loans_to_deposits` was graded backwards (B1).** The entry carried no
   `lower_is_better`, so `BenchmarkResult.status` took the `>=` branch: a bank
@@ -52,13 +253,14 @@ wrong.
   loans-to-deposits level — bank capital has published levels, funding ratios do
   not. No citation was invented.
 
-  Calibration, measured not asserted: across the 50 real peers of CERT 34352 at
-  `20260630`, seven metrics grade sensibly (majority STRONG, small WEAK tail)
-  while `loans_to_deposits` grades **22 of 50 WEAK with a peer median of 91.12%
-  inside the WEAK zone**. The boundaries are kept because they are what the
-  README documents and are marked HOUSE; fitting them to a 50-bank sample would
-  invent a number with a veneer of evidence. Recorded so a later release can
-  recalibrate deliberately.
+  Calibration, measured not asserted: across the 50 banks nearest CERT 34352 in
+  assets at `20260630` (selected from the 763 in its +/-50% window, retrieved
+  2026-09-05), seven metrics grade sensibly (majority STRONG, small WEAK tail)
+  while `loans_to_deposits` grades **13 of 50 WEAK, 11 of them for exceeding
+  95%, with a peer median of 85.19% that grades ADEQUATE**. The boundaries are
+  kept because they are what the README documents and are marked HOUSE; fitting
+  them to a 50-bank sample would invent a number with a veneer of evidence.
+  Recorded so a later release can recalibrate deliberately.
 
 - **`nim`, `roaa` and `roae` divided YTD flows by point-in-time stocks and
   graded the result against annual thresholds (B2).** `INTINC`, `EINTEXP` and

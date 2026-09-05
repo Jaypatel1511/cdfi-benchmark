@@ -221,6 +221,29 @@ def generate_report(
             f"{_fmt_assets_mm(peer_df['total_assets_mm'].min())} – "
             f"{_fmt_assets_mm(peer_df['total_assets_mm'].max())}"
         )
+        # A peer asset range printed near the institution's own assets, with no
+        # relationship stated between them, is what let a group of the 50
+        # LARGEST banks in the window read as "the 50 real peers". State the
+        # relationship: where the subject falls INSIDE its own peer group.
+        percentile = getattr(peers, "asset_percentile", None)
+        if percentile is not None:
+            below = sum(
+                1 for p in peers
+                if not _is_missing(p.total_assets)
+                and p.total_assets < peers.subject_assets
+            )
+            known = sum(1 for p in peers if not _is_missing(p.total_assets))
+            lines.append(
+                f"**Institution's Position in the Peer Asset Range:** "
+                f"{_fmt_assets_mm(institution.total_assets_mm)} — "
+                f"percentile {percentile:g} of its own peer group "
+                f"({below} of {known} peers are smaller). 50 means the group "
+                f"brackets the institution; 0 or 100 means it does not, and the "
+                f"peer median carries a size bias."
+            )
+    basis = getattr(peers, "selection_basis", None)
+    if basis:
+        lines.append(f"**Peer Selection Basis:** {basis}")
     if "state" in peer_df.columns:
         states = peer_df["state"].nunique()
         lines.append(f"**States Represented:** {states}")

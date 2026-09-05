@@ -178,6 +178,73 @@ GRADEABLE_BASES = frozenset({
 _FLOW_OVER_STOCK_METRICS = frozenset({"nim", "roaa", "roae"})
 
 
+# ── Trusting an FDIC-published ratio ──────────────────────────────────────────
+# FDIC publishes a literal 0 where it did not compute a ratio. The zero is a
+# FILL, not a measurement, and it arrives already fabricated — `_is_missing` is
+# working correctly and never sees it, because 0.0 is a present float.
+#
+# Why that is dangerous rather than merely untidy: a published value takes the
+# BASIS_FDIC basis, which is gradeable, so the fill is graded under the
+# strongest warrant the package can attach. `efficiency_ratio` is
+# `lower_is_better`, so 0.0 <= 60 renders **STRONG**. Measured at REPDTE
+# 20260630, 19 of 4,313 filers (0.44%) publish EEFFR == 0, including two real
+# operating US banks inside the CDFI size band:
+#
+#   CERT 33492 CRESCENT BANK          ASSET $1,065,126k  NIMY 4.481  ROA  8.336
+#   CERT 12013 UNION COUNTY SAVINGS   ASSET $1,478,885k  NIMY -0.368 ROA -1.450
+#
+# Both would render `Efficiency Ratio | 0.00% | STRONG`. The asymmetry is what
+# makes it dangerous: the same fill grades NIM and ROAA WEAK, which looks odd
+# and invites a second look; STRONG does not.
+#
+# THE RULE: a published ratio is trusted only when the institution's own
+# reported financials can corroborate it. Two corroboration failures reject it:
+#
+#   (a) UNVERIFIABLE — an input the ratio derives from is absent, so there is
+#       nothing to check the published number against. Catches 17 of the 19
+#       (foreign branches and agencies, for which FDIC omits the call-report
+#       detail entirely).
+#   (b) CONTRADICTED — the published value is exactly 0 while the numerator it
+#       derives from is not. A ratio is zero if and only if its numerator is
+#       zero. Catches the other 2, which are exactly the two operating banks
+#       above: FDIC declines to compute an efficiency ratio when revenue is
+#       negative (both have net interest income + noninterest income < 0) and
+#       fills 0, while their NONIX is 7,318k and 15,293k.
+#
+# (b) is NOT a magic-zero rule. It never fires on a zero that the financials
+# support: a genuinely break-even bank publishing ROA == 0 with NETINC == 0 is
+# trusted, which is why "ROA == 0.00 is plausible" does not defeat it. And the
+# zero is a fill rather than a rounding artifact because FDIC publishes full
+# precision — the smallest nonzero |value| at 20260630 is 0.0373 for NIMY,
+# 0.0118 for ROA and 0.1494 for EEFFR, so a real 0.098% NIM prints as 0.098.
+#
+# Measured cost of the rule at 20260630 over all 4,313 filers: it rejects 19
+# EEFFR fills, 22 NIMY fills, 17 ROA fills and 18 ROE absences, and wrongly
+# rejects ZERO legitimate published values — no row anywhere in the population
+# has an absent numerator input together with a nonzero published ratio.
+#
+# WHAT THIS RULE GETS WRONG is recorded on `reported_is_trustworthy`.
+
+#: Core financial inputs each published ratio derives from. Absent any of them,
+#: the published value cannot be corroborated. `intangible_amortization` is
+#: deliberately NOT required: it is legitimately absent and subtracts nothing.
+_REPORTED_INPUTS = {
+    "nim":              ("interest_income", "interest_expense"),
+    "roaa":             ("net_income",),
+    "roae":             ("net_income",),
+    "efficiency_ratio": ("non_interest_expense", "interest_income",
+                         "interest_expense", "non_interest_income"),
+}
+
+#: Which ``reported_*`` attribute holds each published ratio.
+_REPORTED_FIELDS = {
+    "nim":              "reported_nim",
+    "roaa":             "reported_roaa",
+    "roae":             "reported_roae",
+    "efficiency_ratio": "reported_efficiency_ratio",
+}
+
+
 @dataclass
 class InstitutionProfile:
     """Profile of a single FDIC-insured institution from call report data."""
@@ -243,22 +310,98 @@ class InstitutionProfile:
             return None
         return {"0331": 1, "0630": 2, "0930": 3, "1231": 4}.get(d[4:])
 
-    def metric_basis(self, metric: str) -> str:
-        """How ``metric`` was obtained on this profile — see BASIS_* above."""
+    def _reported_numerator(self, metric: str):
+        """The quantity a published ratio's value is zero if and only if.
+
+        Returns None when it cannot be formed because an input is absent — the
+        caller must then treat the published value as unverifiable, not as
+        corroborated.
+        """
         if metric == "nim":
-            if self.reported_nim is not None:
+            if _is_missing(self.interest_income) or _is_missing(self.interest_expense):
+                return None
+            return self.interest_income - self.interest_expense
+        if metric in ("roaa", "roae"):
+            if _is_missing(self.net_income):
+                return None
+            return self.net_income
+        if metric == "efficiency_ratio":
+            if _is_missing(self.non_interest_expense):
+                return None
+            amort = (0.0 if self.intangible_amortization is None
+                     else self.intangible_amortization)
+            return self.non_interest_expense - amort
+        return None
+
+    def reported_is_trustworthy(self, metric: str) -> bool:
+        """Whether FDIC's published ratio for ``metric`` is a MEASUREMENT here.
+
+        See the "Trusting an FDIC-published ratio" block above for the rule and
+        the population it was measured against. A False here is not "missing":
+        the metric falls back to the computed proxy and renders that proxy's
+        basis, so the cell degrades to what the package can actually support
+        rather than carrying FDIC's fill under FDIC's warrant.
+
+        WHAT THIS RULE GETS WRONG, stated rather than discovered later:
+
+        * **A non-zero sentinel passes.** Only an exact 0 is tested for
+          contradiction. If FDIC ever fills with -1 or 999 this trusts it.
+          Checked at 20260630 and 20260331: the only negative EEFFRs in the
+          population (-700, -5.615, -1.103) are FDIC's OWN correct arithmetic
+          over a negative noninterest expense — reproducible from the filed
+          financials to 0.01 — so they are not sentinels today. But -700 does
+          grade STRONG, and this rule does not stop it; that is recorded as a
+          known limitation, not fixed here.
+        * **A present-financials bank with a genuinely sentinel ratio is
+          trusted.** If a filer reports full financials AND a fabricated
+          non-zero ratio, nothing here catches it.
+        * **(a) is stricter than "the value is wrong".** It rejects a real
+          published ratio whenever FDIC omits an input. That costs nothing in
+          today's population (zero such rows), but a future FDIC schema change
+          that drops a field would silently degrade many cells to N/A instead
+          of failing loud.
+        * **It says nothing about the DENOMINATOR.** A bank with negative
+          equity (CERT 12013, EQ -$23,485k) has a mathematically defined but
+          meaningless ROE, and this rule trusts it.
+        """
+        field = _REPORTED_FIELDS.get(metric)
+        if field is None:
+            return False
+        reported = getattr(self, field)
+        if reported is None:
+            return False
+        # (a) unverifiable — an input the ratio derives from is absent.
+        if any(_is_missing(getattr(self, f))
+               for f in _REPORTED_INPUTS.get(metric, ())):
+            return False
+        # (b) contradicted — a ratio is zero iff its numerator is zero.
+        if reported == 0:
+            numerator = self._reported_numerator(metric)
+            if numerator is not None and numerator != 0:
+                return False
+        return True
+
+    def metric_basis(self, metric: str) -> str:
+        """How ``metric`` was obtained on this profile — see BASIS_* above.
+
+        This and the metric properties below ask the SAME question through the
+        same predicate, so a value and the basis rendered beside it can never
+        disagree about where the value came from.
+        """
+        if metric == "nim":
+            if self.reported_is_trustworthy("nim"):
                 return BASIS_FDIC
             return BASIS_NIM_TOTAL_ASSETS
         if metric == "roaa":
-            if self.reported_roaa is not None:
+            if self.reported_is_trustworthy("roaa"):
                 return BASIS_FDIC
             return self._computed_flow_basis()
         if metric == "roae":
-            if self.reported_roae is not None:
+            if self.reported_is_trustworthy("roae"):
                 return BASIS_FDIC
             return self._computed_flow_basis()
         if metric == "efficiency_ratio":
-            if self.reported_efficiency_ratio is not None:
+            if self.reported_is_trustworthy("efficiency_ratio"):
                 return BASIS_FDIC
             # Numerator and denominator are both YTD flows over the same
             # period, so the period cancels exactly. Annualizing this would
@@ -287,7 +430,7 @@ class InstitutionProfile:
         # the basis the 3.5%/2.5% thresholds are calibrated to. The fallback
         # below is a YTD proxy over TOTAL assets and is NOT graded (see
         # metric_basis / GRADEABLE_BASES).
-        if self.reported_nim is not None:
+        if self.reported_is_trustworthy("nim"):
             return self.reported_nim
         if _is_missing(self.total_assets):
             return float("nan")
@@ -313,7 +456,7 @@ class InstitutionProfile:
         the period cancels: this metric is period-neutral and must NOT be
         annualized. Annualizing it would introduce an error where there is none.
         """
-        if self.reported_efficiency_ratio is not None:
+        if self.reported_is_trustworthy("efficiency_ratio"):
             return self.reported_efficiency_ratio
         revenue = ((self.interest_income - self.interest_expense)
                    + self.non_interest_income)
@@ -332,7 +475,7 @@ class InstitutionProfile:
         # FDIC ROA when published: annualized over AVERAGE assets. The fallback
         # is YTD net income over PERIOD-END assets and is graded only at a Q4
         # report date, where the flow covers the full year.
-        if self.reported_roaa is not None:
+        if self.reported_is_trustworthy("roaa"):
             return self.reported_roaa
         if _is_missing(self.total_assets):
             return float("nan")
@@ -343,7 +486,7 @@ class InstitutionProfile:
     @property
     def roae(self) -> Optional[float]:
         # FDIC ROE when published: annualized over AVERAGE equity. See roaa.
-        if self.reported_roae is not None:
+        if self.reported_is_trustworthy("roae"):
             return self.reported_roae
         if _is_missing(self.total_equity):
             return float("nan")

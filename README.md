@@ -35,13 +35,21 @@ tables by hand. cdfi-benchmark automates the entire workflow in Python.
     # by this README.
     institution = get_financials(cert=34352)
 
-    # Build peer group — similar asset size, no API key needed. Peers are
+    # Build peer group — the banks NEAREST the institution in assets inside a
+    # +/-50% window, not the largest ones in it. No API key needed. Peers are
     # pinned to the institution's own report_date unless you pass another.
     peers = build_peer_group(institution, same_state=True)
 
+    # How the group was chosen, in words, including that the window and the
+    # group size are this tool's own choices.
+    print(peers.selection_basis)
+    # Where the institution sits INSIDE its own peer group by assets. Near 50
+    # means the group brackets it; 0 or 100 means the comparison is size-skewed.
+    print("subject asset percentile:", peers.asset_percentile)
+
     # Anything that makes the peer group less than ideal is on the group and
     # is rendered on the report — a dropped same-state constraint, a group
-    # below min_peers, a mixed reporting period.
+    # below min_peers, a mixed reporting period, a size-skewed group.
     for caveat in peers.caveats:
         print("CAVEAT:", caveat)
 
@@ -122,10 +130,14 @@ argued with, not as a standard to be met.
 
 **Loans-to-deposits is graded as a band, not a ladder.** Above the band is funding
 strain; below it is under-deployment, which for a CDFI bank is its own failure. All
-three boundaries are house numbers. Calibration note, measured against the 50 real
-peers of CERT 34352 at `20260630`: this band grades 22 of 50 WEAK, with a peer
-median of 91.12% sitting inside the WEAK zone. The boundaries are deliberately
-conservative; they have not been fitted to any population.
+three boundaries are house numbers. Calibration note, measured against the 50
+banks nearest CERT 34352 in assets at `20260630` — selected from the 763 in its
++/-50% asset window, retrieved 2026-09-05: this band grades **13 of 50 WEAK, 11
+of them for exceeding 95%**, and the peer median of 85.19% grades **ADEQUATE**.
+The WEAK tail is therefore almost entirely the funding-strain edge, not the
+under-deployment floor — which is the band doing what it was added to do. The
+boundaries are deliberately conservative; they have not been fitted to any
+population.
 
 ---
 

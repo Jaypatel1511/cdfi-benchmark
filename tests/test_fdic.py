@@ -390,6 +390,48 @@ def test_ratio_class_field_out_of_range_raises_naming_field():
     assert mock_get.called
 
 
+@pytest.mark.parametrize("leverage,cert,name", [
+    (277.16, 59379, "CORNERSTONE COMMUNITY BANK"),
+    (194.25, 16281, "FIRST CITY BANK"),
+    (142.22, None, "the 20260331 population maximum"),
+])
+def test_a_real_leverage_ratio_above_150_is_not_rejected(leverage, cert, name):
+    """The ratio-class bound was [-100, 150] and that was too tight.
+
+    RBC1AAJ is Tier 1 capital over AVERAGE assets, so a de novo bank (whose
+    average assets trail its period-end assets) or one in wind-down holding
+    almost all equity legitimately exceeds 100%. Measured over every active
+    FDIC filer at six quarters: max RBC1AAJ was 105.01 / 117.66 / 117.29 /
+    119.35 / 142.22 / 277.16. The 150 bound fit five quarters by luck and
+    raised FDICResponseError on two real banks in the sixth.
+
+    This was invisible while `build_peer_group` fetched only the 55 LARGEST
+    banks in the window. Fetching the WHOLE window (B1) reaches these filers,
+    and a single one of them aborted the entire peer group — for subjects in
+    the $25MM-$75MM range, which is squarely the CDFI size band.
+    """
+    row = _leverage_row(RBC1AAJ=leverage)
+    with patch.object(fdic.requests, "get", return_value=_response(_wrap(row))):
+        profile = fdic.get_financials(25883)
+    assert profile.tier1_ratio == pytest.approx(leverage), (
+        f"a real leverage ratio of {leverage}% ({name}) was rejected as "
+        f"implausible"
+    )
+
+
+def test_ratio_class_guard_still_catches_a_dollar_magnitude_capital_figure():
+    """Widening the bound must not disarm the guard it widened.
+
+    RBCT1J (Tier 1 capital, $k) reaches 302,589,000 — four orders of magnitude
+    outside the ratio band — which is the swap this guard exists to catch.
+    """
+    row = _leverage_row(RBC1AAJ=302589000)
+    with patch.object(fdic.requests, "get", return_value=_response(_wrap(row))):
+        with pytest.raises(FDICResponseError) as exc:
+            fdic.get_financials(25883)
+    assert "RBC1AAJ" in str(exc.value)
+
+
 def test_dollar_class_field_large_value_not_bounded():
     """The guard must NOT bound dollar-class fields: gross loans of 390000 (a
     legitimate thousands-of-dollars magnitude) must parse without raising."""
