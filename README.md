@@ -29,32 +29,55 @@ tables by hand. cdfi-benchmark automates the entire workflow in Python.
         generate_report, summary_table,
     )
 
-    # Pull call report data for Broadway Federal Bank (CERT 57542)
-    institution = get_financials(cert=57542)
+    # Pull call report data for City First Bank, N.A. (CERT 34352) — a real
+    # CDFI/MDI in Washington, DC. Look a CERT up with search_institutions()
+    # rather than copying one; a cert and a name are bound by the FDIC, not
+    # by this README.
+    institution = get_financials(cert=34352)
 
-    # Build peer group — similar asset size, no API key needed
+    # Build peer group — the banks NEAREST the institution in assets inside a
+    # +/-50% window, not the largest ones in it. No API key needed. Peers are
+    # pinned to the institution's own report_date unless you pass another.
     peers = build_peer_group(institution, same_state=True)
+
+    # How the group was chosen, in words, including that the window and the
+    # group size are this tool's own choices.
+    print(peers.selection_basis)
+    # Where the institution sits INSIDE its own peer group by assets. Near 50
+    # means the group brackets it; 0 or 100 means the comparison is size-skewed.
+    print("subject asset percentile:", peers.asset_percentile)
+
+    # Anything that makes the peer group less than ideal is on the group and
+    # is rendered on the report — a dropped same-state constraint, a group
+    # below min_peers, a mixed reporting period, a size-skewed group.
+    for caveat in peers.caveats:
+        print("CAVEAT:", caveat)
 
     # Generate benchmarking report
     report = generate_report(institution, peers)
     print(report)
 
-    # Get results as DataFrame
+    # Get results as DataFrame — includes `basis` and `threshold_source`
     df = summary_table(institution, peers)
 
 ---
 
 ## Sample Data (No API Required)
 
+**Everything in this block is invented.** The institution does not exist, its
+CERT is outside the FDIC's issued range, and `build_sample_peer_group` generates
+its peers by scaling these figures pseudo-randomly. No report built from it
+describes any real bank. Use it to see the output shape, never as data.
+
     from cdfibenchmark import build_sample_peer_group
     from cdfibenchmark.data.schema import InstitutionProfile
 
     institution = InstitutionProfile(
-        cert=57542,
-        name="Broadway Federal Bank",
+        cert=99001,                                   # not an issued FDIC cert
+        name="Riverstone Community Bank (SYNTHETIC)",
         city="Los Angeles",
         state="CA",
-        report_date="20241231",
+        report_date="20241231",                       # Q4 — a full-year period
         total_assets=655_000,
         total_deposits=520_000,
         net_loans=380_000,
@@ -71,20 +94,83 @@ tables by hand. cdfi-benchmark automates the entire workflow in Python.
     report = generate_report(institution, peers)
     print(report)
 
+Because this profile carries no FDIC-published ratios, NIM/ROAA/ROAE fall back to
+the computed proxy — so the report shows their values with a **Basis:** line and
+grades NIM `N/A`. That is the intended behaviour, not a bug; see
+**Period basis** below.
+
 ---
 
 ## Metrics Computed
 
-| Metric | Description | Benchmark (Strong) |
-|--------|-------------|-------------------|
-| NIM | Net Interest Margin | >= 3.5% |
-| Efficiency Ratio | Non-interest expense / Revenue | <= 60% |
-| ROAA | Return on Average Assets | >= 1.0% |
-| ROAE | Return on Average Equity | >= 10% |
-| Tier 1 Leverage Ratio | Tier 1 core capital / average assets (FDIC `RBC1AAJ`) | >= 8% |
-| Loans-to-Deposits | Loan utilization | <= 80% |
-| NPL Ratio | Non-performing loans / Gross loans | <= 1.0% |
-| Reserve Coverage | Loan loss reserve / NPLs | >= 100% |
+| Metric | Source field | Benchmark (Strong) | Threshold provenance |
+|--------|--------------|--------------------|----------------------|
+| NIM | FDIC `NIMY` | >= 3.5% | **HOUSE** |
+| Efficiency Ratio | FDIC `EEFFR` | <= 60% | **HOUSE** |
+| ROAA | FDIC `ROA` | >= 1.0% | **HOUSE** |
+| ROAE | FDIC `ROE` | >= 10% | **HOUSE** |
+| Tier 1 Leverage Ratio | FDIC `RBC1AAJ` | >= 8% | 12 CFR 324.12 / 324.403 |
+| Loans-to-Deposits | `LNLSNET` / `DEP` | 50%–80% (band) | **HOUSE** |
+| NPL Ratio | `NCLNLS` / `LNLSGR` | <= 1.0% | **HOUSE** |
+| Reserve Coverage | `LNATRES` / `NCLNLS` | >= 100% | **HOUSE** |
+
+### Threshold provenance
+
+`tier1_ratio` is the **only** metric whose thresholds come from a published
+regulatory standard. Bank capital has one; earnings, efficiency, funding and
+reserve-coverage ratios do not — the FDIC publishes these series and reports them
+against a peer group in the UBPR, but publishes no required or "well
+capitalized"-equivalent cut point for any of them.
+
+Every other threshold in this package is therefore a **HOUSE** rule of thumb: this
+tool's own, marked `"source": "HOUSE"` in `BENCHMARKS`, defined by `HOUSE_`-prefixed
+constants, and rendered on every report as *"this tool's own threshold (HOUSE), not
+a regulatory or supervisory standard"*. Treat them as a starting point to be
+argued with, not as a standard to be met.
+
+**Loans-to-deposits is graded as a band, not a ladder.** Above the band is funding
+strain; below it is under-deployment, which for a CDFI bank is its own failure. All
+three boundaries are house numbers. Calibration note, measured against the 50
+banks nearest CERT 34352 in assets at `20260630` — selected from the 763 in its
++/-50% asset window, retrieved 2026-09-05: this band grades **13 of 50 WEAK, 11
+of them for exceeding 95%**, and the peer median of 85.19% grades **ADEQUATE**.
+The WEAK tail is therefore almost entirely the funding-strain edge, not the
+under-deployment floor — which is the band doing what it was added to do. The
+boundaries are deliberately conservative; they have not been fitted to any
+population.
+
+---
+
+## Period basis — read this before comparing a quarter
+
+FDIC call-report income items (`INTINC`, `EINTEXP`, `NETINC`) are **year-to-date**.
+At a Q1 `REPDTE` they cover three months. Dividing them by a point-in-time balance
+and grading the result against an annual-basis threshold reads roughly **4x low** —
+a healthy bank grades WEAK. Measured for CERT 34352 at `20260331`, computed versus
+FDIC's own published series: NIM 4.30x, ROAA 4.12x, ROAE 4.01x.
+
+This package does **not** annualize an estimate. It prefers FDIC's own published
+ratios — `NIMY`, `ROA`, `ROE`, `EEFFR` — which are already annualized and computed
+over the correct *average* denominators, which is the basis the thresholds are
+calibrated to. That is a measurement, not a projection.
+
+When a published ratio is absent (a hand-built `InstitutionProfile`, or a field the
+API omitted) the computed proxy is used, its **basis is rendered on the report**,
+and it is **not graded**:
+
+| Metric | Computed fallback | Graded? |
+|--------|-------------------|---------|
+| NIM | net interest income / **total** assets, YTD | **Never** — the 3.5% threshold is calibrated to `NIMY`, which is over average **earning** assets. A larger denominator biases it low at every period, including Q4. |
+| ROAA / ROAE | YTD net income / **period-end** balances | Only at a Q4 `REPDTE`, where the flow covers the full year. |
+| Efficiency Ratio | `(NONIX - EAMINTAN) / ((INTINC - EINTEXP) + NONII)` | **Always** — numerator and denominator are YTD flows over the same period, so the period cancels exactly. Annualizing it would *introduce* an error. |
+| Tier 1, L/D, NPL, Reserve Coverage | period-end balances only | **Always** — no flow item, no period error. |
+
+Labels follow the basis. "Return on **Average** Assets (ROAA)" is used only when
+the value is FDIC's published `ROA`; the computed fallback renders as "Return on
+Assets, period-end (ROAA)", because that is what was actually divided by what.
+
+A value that is reported but not graded shows its measurement and an explicit
+**Not graded:** line. The number is never hidden — only the grade is withheld.
 
 ---
 
@@ -112,7 +198,11 @@ FDIC BankFind Suite API — free public API, no authentication required.
 Data covers all FDIC-insured institutions with quarterly call report data
 since 1934.
 
-    https://banks.data.fdic.gov/api
+    https://api.fdic.gov/banks
+
+The historical host `banks.data.fdic.gov/api` now answers HTTP 301 and redirects
+here. Requests still succeed through the redirect, which is why the move went
+unnoticed; the package now calls the canonical host directly.
 
 ---
 
@@ -147,7 +237,7 @@ its shape" (`FDICResponseError`):
     from cdfibenchmark import FDICAPIError, FDICResponseError
 
     try:
-        institution = get_financials(cert=57542)
+        institution = get_financials(cert=34352)
     except FDICAPIError:
         ...   # transport/HTTP/decode failure — retry or alert
     except FDICResponseError:
@@ -159,13 +249,14 @@ its shape" (`FDICResponseError`):
 
     PYTHONPATH=. pytest tests/ -v
 
-96 tests across all modules.
+Every gate in this suite was run RED before the fix it covers was written.
 
 ---
 
 ## Who This Is For
 
-- CDFI banks and credit unions benchmarking against peers
+- CDFI banks and MDIs benchmarking against peers (**FDIC-insured banks only** —
+  credit unions are NCUA-regulated and are not covered by this API or this tool)
 - MDI management teams preparing board reports
 - CDFI Fund analysts reviewing institution performance
 - Impact investors evaluating CDFI bank investments

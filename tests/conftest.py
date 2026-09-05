@@ -5,9 +5,18 @@ from cdfibenchmark.peers.selector import build_sample_peer_group
 
 @pytest.fixture
 def sample_institution():
+    """A FICTIONAL institution. Its CERT is outside the FDIC's issued range.
+
+    This fixture previously carried cert=57542 with the name "Broadway Federal
+    Bank". CERT 57542 is Toyota Financial Savings Bank (Henderson NV, $16.8B) —
+    verified against the live FDIC /institutions endpoint. Broadway Federal is
+    CERT 30306 and is inactive. A fixture that binds a real cert to the wrong
+    real name teaches the binding to every reader who copies it, which is how
+    it reached the README's Quickstart as a LIVE call.
+    """
     return InstitutionProfile(
-        cert=57542,
-        name="Broadway Federal Bank",
+        cert=99001,
+        name="Riverstone Community Bank (SYNTHETIC)",
         city="Los Angeles",
         state="CA",
         report_date="20241231",
@@ -42,8 +51,8 @@ def present_zero_cored_institution():
     zero to "N/A" the way a truthiness gate would.
     """
     return InstitutionProfile(
-        cert=57543,
-        name="Zero Income Bank",
+        cert=99002,
+        name="Zero Income Bank (SYNTHETIC)",
         city="Los Angeles",
         state="CA",
         report_date="20241231",

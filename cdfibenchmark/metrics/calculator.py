@@ -70,6 +70,11 @@ def benchmark_institution(
             peer_count=peer_count,
             unit=config.get("unit", "%"),
             lower_is_better=config.get("lower_is_better", False),
+            # How the institution's value was measured, and where the threshold
+            # it is compared against comes from. Both ride along to the render
+            # layer so no cell can show a grade without showing its warrant.
+            basis=institution.metric_basis(metric),
+            source=config.get("source"),
         ))
 
     return results
@@ -84,28 +89,63 @@ def rank_institution(
     Rank an institution within its peer group for a specific metric.
 
     Returns:
-        Dict with rank, percentile, and peer count
+        Dict with rank, percentile, peer_count, and — when the metric cannot be
+        ranked — a `reason` naming why.
+
+    `percentile` is the share of PEERS this institution beats, so it spans the
+    full 0-100 range. The previous formula, ``(1 - rank / N) * 100`` over peers
+    PLUS the institution, could never return 100 (the best of 21 scored 95.2)
+    and pinned the worst at exactly 0. `peer_count` likewise counted the
+    institution itself, so it disagreed with `BenchmarkResult.peer_count` — the
+    same key name meaning two different things in one package.
     """
     peer_df = compute_peer_metrics(peers)
     inst_value = institution.metrics_dict().get(metric)
 
+    config = BENCHMARKS.get(metric, {})
+
     # A missing (None) or unknown (NaN) metric can't be ranked — list.index on
     # NaN is meaningless. Treat it as not-available, like the absent case.
     if inst_value is None or pd.isna(inst_value) or metric not in peer_df.columns:
-        return {"rank": None, "percentile": None, "peer_count": len(peers)}
+        return {"rank": None, "percentile": None, "peer_count": len(peers),
+                "reason": "institution value is missing or unknown"}
+
+    # A BANDED metric has no monotone "better" direction: both a value above
+    # the band and one below it are worse than the middle. Ranking it as though
+    # lower (or higher) always won produced a direct contradiction between the
+    # two surfaces of the same metric — measured before this fix, a bank at 15%
+    # loans-to-deposits graded WEAK and ranked 1st of 21 at the 95.2nd
+    # percentile. Refuse the rank and say so rather than order the unorderable;
+    # any distance-from-band ordering would be a house construct on top of
+    # already-house boundaries.
+    if config.get("floor") is not None:
+        return {
+            "rank": None, "percentile": None, "peer_count": len(peers),
+            "reason": (
+                f"{metric} is graded as a band, so there is no monotone "
+                f"better-direction to rank on"
+            ),
+        }
 
     peer_values = peer_df[metric].dropna().tolist()
-    peer_values_with_inst = sorted(peer_values + [inst_value], reverse=True)
+    if not peer_values:
+        return {"rank": None, "percentile": None, "peer_count": 0,
+                "reason": "no peer has a value for this metric"}
 
-    lower_is_better = BENCHMARKS.get(metric, {}).get("lower_is_better", False)
+    lower_is_better = config.get("lower_is_better", False)
     if lower_is_better:
-        peer_values_with_inst = sorted(peer_values + [inst_value])
-
-    rank = peer_values_with_inst.index(inst_value) + 1
-    percentile = round((1 - rank / len(peer_values_with_inst)) * 100, 1)
+        beaten = sum(1 for v in peer_values if v > inst_value)
+        ahead = sum(1 for v in peer_values if v < inst_value)
+    else:
+        beaten = sum(1 for v in peer_values if v < inst_value)
+        ahead = sum(1 for v in peer_values if v > inst_value)
 
     return {
-        "rank": rank,
-        "percentile": percentile,
-        "peer_count": len(peer_values_with_inst),
+        "rank": ahead + 1,
+        # `rank` places the institution AMONG the peers, so it runs 1..N+1,
+        # while `peer_count` counts peers only. Reported alone the pair reads
+        # as nonsense ("rank 21, peer_count 20"); rank_of names the denominator.
+        "rank_of": len(peer_values) + 1,
+        "percentile": round(beaten / len(peer_values) * 100, 1),
+        "peer_count": len(peer_values),
     }

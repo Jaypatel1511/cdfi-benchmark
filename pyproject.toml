@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cdfi-benchmark"
-version = "0.2.1"
-description = "CDFI and MDI peer benchmarking tool using FDIC call report data — NIM, efficiency ratio, ROAA, CET1, and more"
+version = "0.3.0"
+description = "CDFI and MDI peer benchmarking tool using FDIC call report data — NIM, efficiency ratio, ROAA, ROAE, Tier 1 leverage, and more"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
