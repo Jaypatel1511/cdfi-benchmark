@@ -148,20 +148,196 @@ proximity rather than by size.
   rather than fail loud if FDIC dropped a field; and it says nothing about the
   DENOMINATOR, so a bank with negative equity keeps a meaningless ROE.
 
-- **The ratio-class plausibility bound rejected real leverage ratios.**
-  `_RATIO_MAX` was 150. `RBC1AAJ` is Tier 1 capital over AVERAGE assets, so a de
-  novo bank or one in wind-down legitimately exceeds 100%. Measured across six
-  quarters over every active filer, the maximum was 105.01 / 117.66 / 117.29 /
-  119.35 / 142.22 / **277.16** — 150 fit five quarters by luck and raised
-  `FDICResponseError` on two real banks in the sixth (CERT 59379, equity 55.3%
-  of assets; CERT 16281, 94.5%). This was unreachable while the peer query
-  returned only the 55 largest banks in the window; fetching the whole window
-  reaches them, and one such bank aborted the ENTIRE peer group — for subjects
-  in the $25MM-$75MM range, squarely the CDFI size band. Bound widened to 1,000,
-  which still catches the four-orders-of-magnitude swap the guard exists for
-  (`RBCT1J` reaches 302,589,000). The comment claiming the guard separates the
-  field classes has been corrected: `RBCT1J` is as low as $62k for a small
-  filer, well inside the ratio band, so it cannot.
+- **The ratio-class plausibility bound rejected real leverage ratios, and its
+  own justification was false.** `_RATIO_MAX` was 150. `RBC1AAJ` is Tier 1
+  capital over adjusted AVERAGE assets, so a de novo bank or one in wind-down
+  legitimately exceeds 100%; 150 fit five of six measured quarters by luck and
+  raised `FDICResponseError` on two real banks in the sixth (CERT 59379,
+  equity 55.3% of assets, 277.16; CERT 16281, 94.5%, 194.25 — **both at
+  20260630**, which an earlier note in this file misattributed across two
+  quarters). This was unreachable while the peer query returned only the 55
+  largest banks in the window; fetching the whole window reaches them, and one
+  such bank aborted the ENTIRE peer group — for subjects in the $25MM-$75MM
+  range, squarely the CDFI size band.
+
+  The bound was then widened to 1,000 with the comment *"1000 admits every
+  observed leverage ratio with room"*. **That was false in both halves, and the
+  package's own sweep refutes it.** Every REPDTE the endpoint serves, 1984Q1
+  through 2026Q2 — 169 quarters, swept 2026-09-05:
+
+  | population | min `RBC1AAJ` | max `RBC1AAJ` |
+  |---|---|---|
+  | 1984Q1–2026Q2 (169 quarters) | **-1,524.07** (CERT 34128, 19960331) | **466,500.00** (CERT 27213, 19880331) |
+  | 2015Q1–2026Q2 (46 quarters) | -6.20 (CERT 9956, 20160331) | **951.11** (CERT 59287, 20220331) |
+
+  So (a) 1,000 does not admit every observed value — the observed maximum is
+  466,500, a real filing; and (b) it does not have room even on the modern
+  population, where ENTREBANK filed 951.11 at 20220331 on $33,708k of assets —
+  **5.1% below the bound, on a bank squarely inside the CDFI size band.** The
+  earlier six-quarter measurement stopped at 277.16 and 1,000 read as 3.6x
+  headroom; it is 1.05x.
+
+  **No scalar band separates the two field classes.** A band reaching 466,500
+  would admit more than 80% of the `RBCT1J` dollar values in the population; at
+  1,000 the guard refuses 4,295 of the 4,296 `RBCT1J` values at 20260630 and
+  zero real `RBC1AAJ` values. 1,000 is kept — it is the largest bound that holds
+  dollar-magnitude detection above 99.8% — but it is now documented as **a
+  magnitude heuristic calibrated to the modern population**, with the
+  measurement table beside it, not as a class separator.
+
+  **A breach now DEGRADES THE FIELD instead of raising.** `tier1_ratio` becomes
+  `None` (status N/A, dropped from the peer median), and the rest of the row,
+  the request and the peer group are untouched. Raising put the cost of a thin
+  heuristic on eight metrics for every peer, over one optional field on one
+  institution — worse than the single nonsense cell it avoided, and the same
+  degrade-the-cell doctrine `GRADEABLE_BASES` and `reported_is_trustworthy`
+  already follow. A SYSTEMATIC field swap stays loud: every peer breaches and
+  the metric goes N/A across the whole group.
+
+  **What degrading gets wrong, and what was added because of it:** a value the
+  user does not see rejected. So a refusal is recorded, never swallowed —
+  `InstitutionProfile.implausible_fields` names the field, `metric_basis`
+  returns `BASIS_REJECTED_IMPLAUSIBLE` (distinct from `BASIS_UNREPORTED`, so a
+  refusal can never read as "FDIC published nothing"), the metric detail renders
+  a **Not shown** note saying the bound is this tool's heuristic and the
+  published value was a real filing, and the peer group carries a caveat
+  counting how many peers it happened to.
+
+  **`_RATIO_MIN` is derived rather than hand-set.** It was `-100.0`, never
+  derived from any measurement and never exercised by any test — the guard's
+  only parametrized case was 277.16 / 194.25 / 142.22, all positive, so neither
+  end of the floor was covered at any value. It refused real filed values in 42
+  of the 169 swept quarters. It is now `-_RATIO_MAX`, the mirror of the ceiling,
+  because what the guard detects is magnitude and there is no measured basis for
+  an asymmetric floor; exactly one quarter in 42 years still breaches it, and
+  under the degrade rule that costs one cell rather than a group.
+
+- **`tier1_ratio` rendered a false basis line.** `metric_basis` handled `nim` /
+  `roaa` / `roae` / `efficiency_ratio` explicitly and **fell through** to
+  `BASIS_STOCK` — "computed from period-end balances". That fall-through is
+  correct for `loans_to_deposits`, `npl_ratio` and `reserve_coverage` and was
+  wrong for `tier1_ratio`, which is FDIC's published `RBC1AAJ` carried through
+  verbatim: nothing computed it, it is not from period-end balances, and the
+  quantity that sentence names is a different number (CERT 16584 at 20260630:
+  value **14.9877**, EQ/ASSET **15.19%**). No grade changed — both bases are
+  gradeable — but the false line rendered on the one FDIC-published value in the
+  group and the only metric carrying a CFR citation, under a docstring promising
+  that "a value and the basis rendered beside it can never disagree about where
+  the value came from". `BASIS_FDIC` was not usable either: it says
+  "annualized", and a capital ratio has no flow period. New
+  `BASIS_FDIC_LEVERAGE` states what the value is, and `tier1_ratio` reports
+  three distinct states — published, unreported, refused.
+
+  **The fall-through itself is gone**, which is the actual fix. `metric_basis`
+  reaches `BASIS_STOCK` through an explicit `_STOCK_RATIO_METRICS` set and ends
+  at `BASIS_UNRULED`, which is **not** gradeable. A metric added without ruling
+  its basis now degrades loudly instead of inheriting whichever branch happened
+  to be written last. Each of the three remaining stock metrics is gated by
+  recomputing it from the two balance-sheet fields its basis claims, so
+  `BASIS_STOCK` is a checked claim rather than an assumed one.
+
+- **The Status column never consults the peer columns, and the page never said
+  so.** `status` compares the institution's value to the fixed thresholds and
+  does not read the peer median or percentiles printed beside it. Measured at
+  20260630, CERT 58490's NPL ratio of 2.53% is 6.2x its peer median (0.41%) and
+  above the 75th percentile (0.71%), while its reserve coverage is 22% of the
+  peer median and below the 25th percentile — **both grade ADEQUATE**; CERT
+  16584's ROAA is below its peer median, prints *"0.12% below median"*, and
+  grades STRONG. Every grade is correct. What was missing is the sentence, now
+  rendered directly beneath the Performance Summary table and in the README.
+
+- **Printed arithmetic that did not add up on 4 of 16 rows.** `vs_median` was
+  computed on raw values and rounded independently of the operands the page
+  prints, so CERT 16584's NIM rendered `4.36%`, `3.94%` and `0.41% above
+  median`. The RENDERED difference is now the difference of the RENDERED
+  operands; `BenchmarkResult.vs_median` stays exact for programmatic consumers.
+
+- **Asset figures carried no thousands separator.** `$2027.0MM`,
+  `$4091315.0MM`. Now `$2,027.0MM` and `$4,091,315.0MM`.
+
+- **The most prominently disclosed peer-selection constant is the one that does
+  nothing.** `selection_basis` led with *"out of 828 in a +/-50% asset window"*.
+  Measured at 20260630, `HOUSE_ASSET_TOLERANCE` is **inert for 4,232 of 4,313
+  filers (98.1%)**: for CERT 16584 the group is the identical 50 CERTs at a
+  tolerance of 0.5, 0.2, 0.1, 0.05 and 0.03, and first changes at 0.02. The
+  group's actual breadth is set by `HOUSE_MAX_PEERS` and measured
+  **-3.00%/+2.92%** (CERT 16584) and **-5.55%/+5.45%** (CERT 58490) — roughly an
+  order of magnitude tighter than the window a reader was being shown. The
+  realized span now leads the sentence, and the window is described as what it
+  is: a bound on the candidate pool that usually does not bind.
+
+- **A caveat that was false of its own document.** At zero peers — reachable
+  from an ordinary typo, a `report_date` on which no institution filed — the
+  report rendered *"Percentiles over so few peers are not a reliable
+  benchmark"* while containing no percentiles at all, every peer column N/A, and
+  `STRONG` still printed under the title *CDFI Peer Benchmarking Report*. n=0
+  now gets its own caveat saying no benchmarking was performed, and the small-n
+  sentence is reserved for the small-but-nonzero groups it describes.
+
+- **`ASSET_BUCKETS` named something on the report face with no attribution.**
+  `**Asset Bucket:** Large` was the only classifying constant rendering there
+  with no HOUSE marker, no boundaries and no attribution, while fifteen
+  constants beside it carried all three — and "Large" is a supervisory word
+  under CRA and in the FDIC's own definitions, neither of which this band is.
+  Renamed `HOUSE_ASSET_BUCKETS` (`ASSET_BUCKETS` kept as an alias and still
+  exported), and the line now renders its boundaries and its attribution.
+  Separately, `asset_bucket`'s bare `return "mega"` fall-through was a claim
+  about two sets and only one had been thought about: a profile with NEGATIVE
+  total assets rendered **Asset Bucket: Mega**. Below the lowest band now
+  answers "unknown".
+
+- **A gate that scans instead of working from a list.**
+  `tests/test_bound_claims.py` tokenizes every `.py` in the tree (comments and
+  strings only, so a list literal is not read as a claim) and reads every `.md`,
+  and fails on any prose stating a numeric bound the constants contradict —
+  unless the sentence is marked as history, or sits under a released version
+  header in this file. This defect class has recurred six times here, and both
+  the audit that found it and the brief that ordered the fix named their sites
+  by hand and missed some. The scan found two the hand-typed list did not: the
+  `RBC1AAJ` contrast comment in `_parse_institution`, and the misattribution of
+  FIRST CITY BANK to 20260331 in the evidence table. It also **cleared one the
+  list had condemned**: where the 0.2.1 section of this file says the bound
+  was `[-100, 150]`, that is correct — at tag `v0.2.1` the bound really was
+  `[-100.0, 150.0]` and really did raise, so rewriting that entry would replace
+  a true statement with a false one.
+
+### Considered and rejected
+
+- **UBPR peer groups as the peer-selection construct.** UBPR is what a bank
+  supervisor would reach for, and not adopting it costs comparability with how
+  examiners talk about peers. It is rejected on **availability and shape, not on
+  quality**:
+
+  - *Availability.* FDIC BankFind exposes no UBPR peer-group assignment.
+    `PEERGROUP` and `UBPRPG` return HTTP 200 with the field silently absent
+    while real fields on the same request return values; `/banks/ubpr`,
+    `/banks/peers` and `/banks/peergroups` all 404. Adopting it would require
+    the FFIEC CDR — a bulk-download portal, not a queryable API — as a second
+    data provider for a single field.
+  - *Shape.* UBPR groups on FIXED asset bands, which put a $111.2MM and a
+    $249MM CDFI in one group. Nearest-neighbour selection puts the subject at
+    percentile 52 of a group spanning ±3%, which is a tighter comparison for
+    the size range this tool serves.
+
+  **Residual:** this is a real loss of comparability with supervisory practice,
+  recorded rather than left as drift. Revisit if FFIEC exposes peer-group
+  assignment through an API.
+
+### Known and carried forward, unfixed
+
+- The peer median is computed across a MIXED basis: peers whose published
+  ratios are trusted contribute FDIC's measurement while peers falling back to
+  the computed proxy contribute a differently-measured number, and the median
+  does not say which.
+- `_metric_label` applies the INSTITUTION's basis to the peer columns, so a peer
+  column can be labelled with a basis that is not the peers'.
+- Published values that are absurd but real are graded as filed. FDIC's `EEFFR`
+  of -700 and -5.615 are FDIC's own correct arithmetic over negative
+  noninterest expense, reproducible from the filed financials, and they grade
+  STRONG. `reported_is_trustworthy` catches only an exact-zero fill; it is not
+  a sanity bound and was deliberately not turned into one under the ratio-class
+  guard, which is calibrated for `RBC1AAJ` alone.
+- A `docs-check` job is not yet in CI; the prose gates run in the test matrix.
 
 - **The threshold-attribution gate could not see what its own docstring
   claimed.** `test_house_thresholds_are_named_house_at_the_constant` states that

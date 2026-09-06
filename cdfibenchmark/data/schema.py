@@ -34,13 +34,45 @@ FDIC_API_BASE = "https://api.fdic.gov/banks"
 FDIC_API_BASE_LEGACY = "https://banks.data.fdic.gov/api"
 
 # ── Asset Size Buckets ────────────────────────────────────────────────────────
-ASSET_BUCKETS = {
+# HOUSE. These boundaries are this tool's own convention and nothing else. They
+# are NOT the FFIEC CRA small/intermediate/large-bank asset thresholds, NOT the
+# FDIC community-bank definition, and NOT a UBPR peer-group band. The word
+# "Large" in particular is a supervisory term with a specific meaning under CRA
+# and under the FDIC's own definitions, and this bucket is not it.
+#
+# Why this needed the HOUSE_ treatment the fifteen grading and selection
+# constants already had: `asset_bucket` is the only classifying constant that
+# names something on the REPORT FACE ("**Asset Bucket:** Large"), and it was the
+# only one rendering there with no marker, no boundaries and no attribution.
+# A house band printed as a bare supervisory-sounding word is the same defect as
+# a house threshold printed in the same column as a CFR citation.
+HOUSE_ASSET_BUCKETS = {
     "micro":    (0,           50_000),      # Under $50MM
     "small":    (50_000,      250_000),     # $50MM - $250MM
     "medium":   (250_000,     1_000_000),   # $250MM - $1B
     "large":    (1_000_000,   5_000_000),   # $1B - $5B
     "mega":     (5_000_000,   float("inf")),# Over $5B
 }
+#: Back-compat alias. `ASSET_BUCKETS` is in the package's `__all__` and has been
+#: public since 0.2.0; `HOUSE_ASSET_BUCKETS` is the name that carries the
+#: attribution. Same object, so a caller mutating one sees the other.
+ASSET_BUCKETS = HOUSE_ASSET_BUCKETS
+
+
+def asset_bucket_bounds_text(bucket: str) -> str:
+    """The bucket's own boundaries, rendered, so the word never travels alone.
+
+    "Large" tells a reader nothing checkable; "Large ($1,000MM-$5,000MM)" tells
+    them exactly what this tool means by it and lets them disagree.
+    """
+    bounds = HOUSE_ASSET_BUCKETS.get(bucket)
+    if bounds is None:
+        return ""
+    low, high = bounds
+    low_mm = low / 1_000
+    if high == float("inf"):
+        return f"over ${low_mm:,.0f}MM"
+    return f"${low_mm:,.0f}MM-${high / 1_000:,.0f}MM"
 
 # ── Threshold provenance ──────────────────────────────────────────────────────
 # Every graded threshold in BENCHMARKS declares a "source". There are exactly
@@ -168,14 +200,54 @@ BASIS_COMPUTED_YTD_UNKNOWN = "computed from YTD flows, period unknown — NOT an
 # NIM over TOTAL assets is not FDIC's NIMY (average EARNING assets), whatever
 # the period — a strictly larger denominator biases it low even at a full year.
 BASIS_NIM_TOTAL_ASSETS = "computed over TOTAL assets — not FDIC NIMY (avg earning assets)"
+# `tier1_ratio` is FDIC's PUBLISHED leverage ratio (RBC1AAJ): Tier 1 capital over
+# adjusted AVERAGE assets. It fell through to BASIS_STOCK, which was false twice
+# over — the package neither computed it nor took it from period-end balances,
+# and BASIS_STOCK names the quantity EQ/ASSET, a different number (14.99 vs
+# 15.19 for CERT 16584 at 20260630). BASIS_FDIC is not true of it either: that
+# string says "annualized", and a capital ratio has no flow period to annualize.
+# This is the one FDIC-published value in the group and the only metric carrying
+# a CFR citation, so it is the line a reader is most likely to check.
+BASIS_FDIC_LEVERAGE = ("FDIC published (RBC1AAJ) — Tier 1 capital over adjusted "
+                       "average assets; a capital ratio, not annualized")
+#: A value FDIC published that the ratio-class plausibility bound in
+#: `cdfibenchmark.data.fdic` rejected. The value is NOT shown and NOT graded:
+#: it is out of the band a percentage can occupy, so it is a wrong-field-class /
+#: API-drift signal rather than a measurement. Never gradeable.
+BASIS_REJECTED_IMPLAUSIBLE = (
+    "FDIC published a value outside the plausibility bound for a percentage — "
+    "rejected as a wrong-field-class signal, not reported"
+)
+#: Nothing was reported for this field at all, so there is no basis to state.
+#: Distinct from BASIS_REJECTED_IMPLAUSIBLE, which means a value arrived and was
+#: refused. Never gradeable.
+BASIS_UNREPORTED = "no value was reported for this field"
+#: The fall-through of last resort. `metric_basis` used to END in a bare
+#: `return BASIS_STOCK`, so any metric nobody had ruled on inherited a specific,
+#: confident and possibly false claim about where its value came from — which is
+#: exactly how `tier1_ratio` came to render one. A metric that reaches here has
+#: had no basis ruled for it, so it says so and cannot be graded.
+BASIS_UNRULED = "basis not established for this metric — see metric_basis"
 
 #: Bases whose values may be graded against a BENCHMARKS threshold.
 GRADEABLE_BASES = frozenset({
-    BASIS_FDIC, BASIS_STOCK, BASIS_FLOW_RATIO, BASIS_COMPUTED_FY,
+    BASIS_FDIC, BASIS_FDIC_LEVERAGE, BASIS_STOCK, BASIS_FLOW_RATIO,
+    BASIS_COMPUTED_FY,
 })
 
 #: Metrics computed from YTD flow items over point-in-time stocks.
 _FLOW_OVER_STOCK_METRICS = frozenset({"nim", "roaa", "roae"})
+
+#: Metrics whose value really IS a ratio of two period-end balance-sheet stocks
+#: carried on this profile, which is the only thing BASIS_STOCK truthfully
+#: describes. `metric_basis` reaches BASIS_STOCK through this set and never
+#: through a fall-through, so adding a metric without ruling its basis degrades
+#: it to BASIS_UNRULED instead of handing it this claim by default.
+_STOCK_RATIO_METRICS = frozenset({
+    "loans_to_deposits",   # net_loans / total_deposits
+    "npl_ratio",           # non_current_loans / gross_loans
+    "reserve_coverage",    # loan_loss_allowance / non_current_loans
+})
 
 
 # ── Trusting an FDIC-published ratio ──────────────────────────────────────────
@@ -281,19 +353,38 @@ class InstitutionProfile:
     reported_roae: Optional[float] = None               # ROE
     reported_efficiency_ratio: Optional[float] = None   # EEFFR
 
+    #: FDIC field names that arrived with a PRESENT value which the parse layer
+    #: refused as implausible for its field class (see `_coerce_float`). The
+    #: field's attribute is None, exactly as if it had been absent — this is
+    #: what keeps "we refused it" from reading as "FDIC never published it".
+    #: Empty on any hand-built profile.
+    implausible_fields: tuple = ()
+
     @property
     def total_assets_mm(self) -> float:
         return self.total_assets / 1_000
 
     @property
     def asset_bucket(self) -> str:
+        """Which HOUSE_ASSET_BUCKETS band this institution's assets fall in.
+
+        The fall-through used to be a bare ``return "mega"``, which is a claim
+        about every value that matched no band — and only ONE side of that set
+        was thought about. Above the top band "mega" is right. BELOW the bottom
+        band it is the worst possible answer: a profile with negative total
+        assets rendered "**Asset Bucket:** Mega" on the report face. Buckets are
+        ordered, so falling off the bottom is answered explicitly.
+        """
         # Unknown assets must not be silently labelled the largest bucket.
         if _is_missing(self.total_assets):
             return "unknown"
         assets = self.total_assets
-        for bucket, (low, high) in ASSET_BUCKETS.items():
+        for bucket, (low, high) in HOUSE_ASSET_BUCKETS.items():
             if low <= assets < high:
                 return bucket
+        floor = min(low for low, _ in HOUSE_ASSET_BUCKETS.values())
+        if assets < floor:
+            return "unknown"
         return "mega"
 
     @property
@@ -407,7 +498,20 @@ class InstitutionProfile:
             # period, so the period cancels exactly. Annualizing this would
             # INTRODUCE an error where there is none.
             return BASIS_FLOW_RATIO
-        return BASIS_STOCK
+        if metric == "tier1_ratio":
+            # FDIC's own published leverage ratio, carried through verbatim.
+            # A value the parse layer refused is a different state from a value
+            # nobody reported, and both are different from a value in hand.
+            if "RBC1AAJ" in self.implausible_fields:
+                return BASIS_REJECTED_IMPLAUSIBLE
+            if self.tier1_ratio is None:
+                return BASIS_UNREPORTED
+            return BASIS_FDIC_LEVERAGE
+        if metric in _STOCK_RATIO_METRICS:
+            return BASIS_STOCK
+        # No branch and not a ruled stock ratio: say so rather than assert the
+        # last branch anyone happened to write. See BASIS_UNRULED.
+        return BASIS_UNRULED
 
     def _computed_flow_basis(self) -> str:
         q = self.fiscal_quarter

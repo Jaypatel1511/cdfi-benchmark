@@ -4,7 +4,8 @@ Generate CDFI peer benchmarking reports.
 import pandas as pd
 from cdfibenchmark.data.schema import (
     InstitutionProfile, BenchmarkResult, BENCHMARKS, _is_missing,
-    BASIS_FDIC, GRADEABLE_BASES,
+    BASIS_FDIC, GRADEABLE_BASES, BASIS_REJECTED_IMPLAUSIBLE,
+    asset_bucket_bounds_text,
 )
 from cdfibenchmark.metrics.calculator import (
     compute_peer_metrics, benchmark_institution, rank_institution
@@ -25,11 +26,14 @@ def _fmt_pct(value) -> str:
 def _fmt_assets_mm(value_mm) -> str:
     """Render an asset figure (already in $MM), mapping absent/unknown to "N/A".
 
-    A real present 0.0 renders "$0.0MM"; NaN never leaks as "$nanMM".
+    A real present 0.0 renders "$0.0MM"; NaN never leaks as "$nanMM". The
+    thousands separator is not cosmetic on a financial document: without it this
+    rendered "$2027.0MM" and "$4091315.0MM", which a reader has to count digits
+    to place.
     """
     if _is_missing(value_mm):
         return "N/A"
-    return f"${value_mm:.1f}MM"
+    return f"${value_mm:,.1f}MM"
 
 
 METRIC_LABELS = {
@@ -53,6 +57,29 @@ _COMPUTED_LABELS = {
     "roaa": "Return on Assets, period-end (ROAA)",
     "roae": "Return on Equity, period-end (ROAE)",
 }
+
+
+#: Decimal places every percentage on the report is rendered at (`_fmt_pct`).
+_PCT_DP = 2
+
+
+def _printed_vs_median(result):
+    """The vs-median difference AS PRINTED, computed from the printed operands.
+
+    `BenchmarkResult.vs_median` subtracts the raw values and is what a
+    programmatic consumer wants. The REPORT does not show raw values: it shows
+    both operands rounded to `_PCT_DP`, and then showed a difference rounded
+    independently from the raw ones. On 4 of the 16 rows across two real
+    subjects at 20260630 the printed arithmetic therefore did not add up — CERT
+    16584's NIM printed `4.36`, `3.94` and `0.41`. Nothing is wrong with the
+    number; what is wrong is asking a reader to accept `4.36 - 3.94 = 0.41`.
+    The rendered difference is now the difference of the rendered operands.
+
+    None when either operand is absent, exactly like `vs_median`.
+    """
+    if _is_missing(result.institution_value) or result.peer_median is None:
+        return None
+    return round(result.institution_value, _PCT_DP) - round(result.peer_median, _PCT_DP)
 
 
 def _metric_label(metric: str, basis: str = None) -> str:
@@ -94,6 +121,26 @@ def _threshold_line(metric: str) -> str:
     return f"**Benchmark:** {band}{attribution}"
 
 
+def _asset_bucket_line(institution) -> str:
+    """The asset bucket, with the boundaries it means and who set them.
+
+    `**Asset Bucket:** Large` was the only classifying constant naming something
+    on the report face with no marker, no boundaries and no attribution — while
+    fifteen grading and selection constants next to it carried all three. And
+    "Large" is a supervisory word: it means specific, different things under CRA
+    and in the FDIC's own definitions, neither of which this band is.
+    """
+    bucket = institution.asset_bucket
+    if bucket == "unknown":
+        return "**Asset Bucket:** N/A — total assets are unknown"
+    bounds = asset_bucket_bounds_text(bucket)
+    return (
+        f"**Asset Bucket:** {bucket.title()} ({bounds}) — "
+        f"**this tool's own size band (HOUSE)**, not an FFIEC CRA threshold, "
+        f"the FDIC community-bank definition, or a UBPR peer group"
+    )
+
+
 def _peer_period_line(peers) -> str:
     """How to describe the peers' own reporting period."""
     dates = sorted(getattr(peers, "report_dates", None)
@@ -122,7 +169,7 @@ def generate_report(
         f"**Institution:** {institution.name}",
         f"**Location:** {institution.city}, {institution.state}",
         f"**Total Assets:** {_fmt_assets_mm(institution.total_assets_mm)}",
-        f"**Asset Bucket:** {institution.asset_bucket.title()}",
+        _asset_bucket_line(institution),
         f"**Report Date:** {institution.report_date}",
         f"**Peer Group Size:** {len(peers)} institutions",
         _peer_period_line(peers),
@@ -164,6 +211,26 @@ def generate_report(
             f"| {label} | {inst_val} | {median} | {p25} | {p75} | {status_emoji} |"
         )
 
+    # The Status column sits beside three peer columns and reads as though it
+    # summarised them. It does not: `BenchmarkResult.status` compares the
+    # Institution column to the fixed thresholds on the Benchmark line below and
+    # never looks at a peer value. Both readings of that are real and neither is
+    # a grading bug — measured at 20260630, CERT 58490's NPL ratio of 2.53% is
+    # 6.2x its peer median (0.41%) and above the 75th percentile (0.71%) while
+    # its reserve coverage is 22% of the peer median and below the 25th
+    # percentile, and both grade ADEQUATE; CERT 16584's ROAA is below its peer
+    # median and grades STRONG. What was missing is the sentence saying so.
+    lines += [
+        "",
+        "**How to read Status:** Status grades the **Institution** column "
+        "against the fixed thresholds shown on each metric's **Benchmark** line "
+        "below. It does **not** consult the Peer Median, 25th or 75th percentile "
+        "columns. A metric can grade STRONG while sitting below the peer median, "
+        "and ADEQUATE while sitting outside the peer range entirely. Read the "
+        "grade and the peer columns as two separate questions — this report "
+        "answers both and combines neither.",
+    ]
+
     lines += [
         "",
         "---",
@@ -181,10 +248,11 @@ def generate_report(
             lines.append(f"**Institution Value:** {_fmt_pct(result.institution_value)}")
         if not _is_missing(result.peer_median):
             lines.append(f"**Peer Median:** {_fmt_pct(result.peer_median)}")
-        if not _is_missing(result.vs_median):
-            direction = "above" if result.vs_median > 0 else "below"
+        vs_printed = _printed_vs_median(result)
+        if not _is_missing(vs_printed):
+            direction = "above" if vs_printed > 0 else "below"
             lines.append(
-                f"**vs Peer Median:** {_fmt_pct(abs(result.vs_median))} {direction} median"
+                f"**vs Peer Median:** {_fmt_pct(abs(vs_printed))} {direction} median"
             )
 
         if result.basis:
@@ -203,6 +271,18 @@ def generate_report(
                 f"**Not graded:** this value is {result.basis}. The threshold "
                 f"is calibrated to FDIC's published annualized series, so the "
                 f"two are not comparable; the measured value is reported above."
+            )
+        # An ABSENT value normally needs no explanation. A REFUSED one does: the
+        # number exists, FDIC published it, and this tool decided not to show it.
+        # Left unsaid, that is indistinguishable from FDIC never publishing it.
+        elif result.basis == BASIS_REJECTED_IMPLAUSIBLE:
+            lines.append(
+                "**Not shown:** FDIC published a value for this metric that "
+                "falls outside this tool's plausibility bound for a percentage, "
+                "so it was refused as a wrong-field-class signal rather than "
+                "graded. The bound is this tool's own heuristic, not FDIC's — "
+                "the published value was a real filing. See "
+                "`cdfibenchmark.data.fdic` for the bound and how it was derived."
             )
         lines.append("")
 

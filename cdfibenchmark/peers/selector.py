@@ -92,18 +92,72 @@ class PeerGroup(list):
         return round(below / len(known) * 100, 1)
 
     @property
+    def asset_span(self):
+        """The selected group's own asset range as (min, max) in $k, or None.
+
+        This — not `asset_tolerance` — is the number that describes how wide the
+        comparison actually is. See `selection_basis`.
+        """
+        known = [p.total_assets for p in self if not _is_missing(p.total_assets)]
+        if not known:
+            return None
+        return (min(known), max(known))
+
+    @property
+    def realized_tolerance_text(self) -> str:
+        """The group's actual breadth around the subject, rendered, or "".
+
+        Measured 2026-09-05 for two real subjects: CERT 16584 ($111.2MM) got a
+        group spanning -3.00%/+2.92%, and CERT 58490 ($2,027.0MM) one spanning
+        -5.55%/+5.45% — against a DISCLOSED asset window of +/-50%.
+        """
+        span = self.asset_span
+        if span is None or _is_missing(self.subject_assets) or not self.subject_assets:
+            return ""
+        lo, hi = span
+        return (f"-{(1 - lo / self.subject_assets) * 100:.2f}%/"
+                f"+{(hi / self.subject_assets - 1) * 100:.2f}%")
+
+    @property
     def selection_basis(self) -> str:
-        """How this group was chosen — rendered so the reader can argue with it."""
+        """How this group was chosen — rendered so the reader can argue with it.
+
+        The order of the two numbers here is the finding. Through 0.3.0 this
+        sentence led with the asset window ("out of 828 in a +/-50% asset
+        window") and named the group only as "the 50 banks". The window is the
+        constant that does NOTHING for almost every subject: measured at
+        20260630, 4,232 of 4,313 filers (98.1%) already have 50 or more banks
+        inside a window far tighter than +/-50%, and for CERT 16584 the group is
+        the IDENTICAL 50 CERTs at a tolerance of 0.5, 0.2, 0.1, 0.05 and 0.03 —
+        it first changes at 0.02. The breadth a reader actually needs is set by
+        `max_peers`, and it is roughly an order of magnitude tighter than the
+        window. So the realized span leads, and the window is described as what
+        it is: a bound on the candidate pool.
+        """
         tol = self.asset_tolerance
         tol_txt = f"+/-{tol * 100:.0f}%" if tol is not None else "an unrecorded"
         universe = (f"{self.universe_size:,}" if self.universe_size is not None
                     else "an unrecorded number of")
+        span = self.asset_span
+        if span is not None:
+            realized = self.realized_tolerance_text
+            breadth = (f"They span ${span[0] / 1_000:,.1f}MM-"
+                       f"${span[1] / 1_000:,.1f}MM"
+                       + (f" ({realized} around the subject)" if realized else "")
+                       + ", which is the group's actual breadth and is set by the "
+                       f"{self.max_peers}-bank cap, not by the window. ")
+        else:
+            breadth = ""
         return (
-            f"the {len(self)} banks NEAREST the subject in total assets, out of "
-            f"{universe} in a {tol_txt} asset window at "
-            f"{self.target_report_date or 'an unpinned period'}. Asset window, "
-            f"group size and nearest-neighbour selection are this tool's own "
-            f"choices (HOUSE), not a supervisory peer-group definition."
+            f"the {len(self)} banks NEAREST the subject in total assets. "
+            f"{breadth}"
+            f"They were selected from a candidate pool of {universe} banks in a "
+            f"{tol_txt} asset window at "
+            f"{self.target_report_date or 'an unpinned period'}; that window "
+            f"bounds the pool, and for most subjects it is wide enough that it "
+            f"does not bind at all. Asset window, group size and "
+            f"nearest-neighbour selection are this tool's own choices (HOUSE), "
+            f"not a supervisory peer-group definition."
         )
 
     @property
@@ -138,7 +192,23 @@ class PeerGroup(list):
                 f"Same-state peers were requested for {self.requested_state} but "
                 f"too few were found; this is a NATIONAL peer group."
             )
-        if self.below_min_peers:
+        if not len(self):
+            # n=0 is NOT "a small peer group". The small-n sentence below tells
+            # the reader that the percentiles in front of them are unreliable;
+            # at n=0 the document contains no percentiles at all, every peer
+            # column reads N/A, and the sentence describes a document other than
+            # the one it is printed in. Reachable from an ordinary user typo: a
+            # `report_date` no bank filed at (e.g. "20260515") returns zero rows.
+            out.append(
+                f"NO peer met the selection criteria at "
+                f"{self.target_report_date or 'the requested period'}, so this "
+                f"is not a peer comparison. Every peer column, percentile and "
+                f"vs-median figure in this report is N/A, and no benchmarking "
+                f"has been performed. Any Status shown grades the institution's "
+                f"own values against fixed thresholds only. Check that the "
+                f"report date is a quarter-end on which institutions filed."
+            )
+        elif self.below_min_peers:
             out.append(
                 f"Peer group has {len(self)} institutions, below the requested "
                 f"minimum of {self.min_peers}. Percentiles over so few peers are "
@@ -168,6 +238,27 @@ class PeerGroup(list):
                 f"group by assets: nearly every peer is {side} than the "
                 f"institution. Comparisons against this group's median carry a "
                 f"size bias."
+            )
+        # A field the parse layer refused (see fdic._coerce_float) is dropped
+        # from that metric's median by `dropna()`, silently, exactly like a value
+        # FDIC never published. Degrading the row is the right remedy, but the
+        # thing degrading gets wrong is that nobody watches it happen — so the
+        # group says how often it happened and to which field.
+        refused = {}
+        for peer in self:
+            for field_name in getattr(peer, "implausible_fields", ()):
+                refused[field_name] = refused.get(field_name, 0) + 1
+        if refused:
+            detail = ", ".join(
+                f"{name} on {n} peer{'s' if n != 1 else ''}"
+                for name, n in sorted(refused.items())
+            )
+            out.append(
+                f"FDIC published a value for {detail} that fell outside this "
+                f"tool's plausibility bound for a percentage and was refused. "
+                f"Those peers are excluded from that metric's median and "
+                f"percentiles. A refusal is this tool's judgement, not FDIC's: "
+                f"the published values were real filings."
             )
         if self.window_truncated:
             out.append(
@@ -311,6 +402,15 @@ def build_peer_group(
         # The endpoint truncates at its cap without saying so. If the row count
         # came back AT the cap the window was larger than one query can return,
         # and the selection below is over a slice again — recorded, not hidden.
+        #
+        # At the DEFAULT tolerance this is unreachable, and the measurement that
+        # says so is worth keeping because B-A's degrade rule opened the
+        # historical path that used to abort first. Swept 2026-09-05, the widest
+        # +/-50% asset window at the densest quarter the endpoint serves
+        # (19840331, 17,930 filers) holds 6,782 banks; at 19900331 it is 6,028
+        # and at 20260630 it is 1,447 — all well under FDIC_MAX_LIMIT. It stays
+        # reachable for a caller who passes a much wider `asset_tolerance`,
+        # which is why the flag is computed rather than assumed away.
         truncated = len(rows) >= FDIC_MAX_LIMIT
         rows = [p for p in rows if p.cert != institution.cert]
         rows = _dedupe_by_cert(rows, target_report_date)
