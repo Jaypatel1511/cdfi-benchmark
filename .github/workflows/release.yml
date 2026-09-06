@@ -2,8 +2,28 @@ name: Release
 
 # Release / publish pipeline. Triggered ONLY by pushing a version tag (v*).
 #
-#   verify-version ─> build ─┬─> test-wheel ─┐
-#                            └─> test-sdist ─┴─> publish
+#   verify-version ─> artifact-layouts (build ─┬─> test-wheel) ─> publish
+#                                              └─> test-sdist
+#
+# artifact-layouts is a workflow_call into .github/workflows/artifact-layouts.yml,
+# which ci.yml calls too. Those three jobs used to be written out here. They were
+# moved, unchanged apart from the two additions noted below, for one reason: as
+# long as they lived only in this file they ran only on a tag push, which is the
+# irreversible step. Every layout check therefore ran after the point of no
+# return, and 0.3.0 is the proof — it is on PyPI permanently with its own shipped
+# suite failing at the tarball root, and all eight artifact jobs of the release
+# that shipped it were green. Calling the same body from ci.yml puts those checks
+# in front of the tag. Pasting a second copy into ci.yml would have put them in
+# front of the tag too, and then let the two copies drift, which is how "the
+# thing we checked" stops being "the thing we shipped".
+#
+# The two additions, both in artifact-layouts.yml:
+#   - test-sdist now also runs the shipped suite from the TARBALL ROOT, the
+#     layout README.md:271 documents and the one the constructed test directory
+#     structurally cannot reach.
+#   - the version the installed sdist must report is now an input rather than
+#     GITHUB_REF_NAME, because ci.yml has no tag. This workflow still passes the
+#     tag, so nothing about the release-time assertion is weakened.
 #
 # test-wheel and test-sdist answer different questions and neither can answer
 # the other's:
@@ -40,6 +60,11 @@ jobs:
   verify-version:
     name: Verify pyproject version matches tag
     runs-on: ubuntu-latest
+    outputs:
+      # The tag version, emitted only after it has been proven equal to
+      # pyproject's. artifact-layouts consumes this to assert what the installed
+      # sdist reports, so that assertion is still anchored on the tag.
+      version: ${{ steps.compare.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,6 +75,7 @@ jobs:
           python-version: "3.12"
 
       - name: Compare tag to pyproject version
+        id: compare
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
@@ -61,355 +87,29 @@ jobs:
             exit 1
           fi
           echo "Version guard OK: ${TAG_VERSION} == ${PYPROJECT_VERSION}"
+          echo "version=${TAG_VERSION}" >> "${GITHUB_OUTPUT}"
 
-  # 2. Build wheel + sdist once, upload as the single source of truth artifact.
-  build:
-    name: Build wheel and sdist
+  # 2-4. Build the wheel and sdist, then test both installed artifacts, plus the
+  #      shipped suite at the tarball root. Identical body to the one ci.yml runs
+  #      on every pull request — same file, not a copy.
+  artifact-layouts:
+    name: Artifact layouts
     needs: [verify-version]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    uses: ./.github/workflows/artifact-layouts.yml
+    with:
+      expected-version: ${{ needs.verify-version.outputs.version }}
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - name: Build distributions
-        run: |
-          python -m pip install build
-          python -m build
-          ls -l dist/
-
-      # This assertion lives HERE, not in test-sdist, because `build` is the only
-      # job holding both the checkout and the tarball. It is an exact set
-      # comparison rather than a magic number: a `-lt N` threshold pinned to the
-      # count shipping that day fails the job with "check MANIFEST.in" when
-      # someone legitimately deletes or merges a test module -- blaming packaging
-      # for a deliberate source change. The invariant that actually matters is
-      # "the tarball contains every test module the repository has", which needs
-      # no threshold.
-      #
-      # WHAT THIS STEP DOES NOT CERTIFY -- read this before "simplifying" the
-      # pipeline down to this one count. It compares test_*.py names ONLY, and
-      # setuptools' legacy sdist default ALREADY matches tests/test*.py. So on
-      # a completely broken MANIFEST.in this assertion still PASSES. Measured
-      # on the pre-fix tarball for this repo: 5 test modules in the checkout,
-      # 5 in the sdist, green -- while tests/conftest.py and tests/__init__.py
-      # were both absent, which is the exact defect that produced 58 passed /
-      # 38 errors and the reason this pipeline exists. conftest.py is not a
-      # test_*.py, so nothing here can ever see it go missing.
-      #
-      # This step fires only where the suite is NESTED, because the default
-      # pattern matches nothing below tests/. Verified across the sweep on
-      # pre-fix tarballs: cdfi-benchmark 5/5 PASS, hmda-analyzer 8/8 PASS,
-      # cdfi-data 4/4 PASS, nmtc-mapper 14/14 PASS -- only
-      # nmtc-application-builder failed, at 14 of 50.
-      #
-      # The check actually doing the work is the required-files loop in
-      # test-sdist, which asserts tests/conftest.py, tests/__init__.py,
-      # README.md and pyproject.toml are present in the tarball. Delete that
-      # loop and keep this count, and the release gate certifies nothing about
-      # the file whose absence broke 0.2.1.
-      - name: Assert the sdist ships every test module in the checkout
-        shell: bash
-        run: |
-          set -euo pipefail
-          SDIST="$(ls dist/*.tar.gz)"
-          # Compare on paths relative to the sdist/checkout root, so nested test
-          # packages (tests/<subdir>/test_*.py) are covered too, not just the top
-          # level. Tarball entries are "<name>-<version>/tests/..."; stripping the
-          # first path component makes the two lists directly comparable.
-          find tests -name 'test_*.py' | sed 's|^|/|' | sort > "${RUNNER_TEMP}/repo-tests.txt"
-          # grep exits 1 on no-match and 2 on error: tolerate 1 so a tarball with
-          # zero test modules reaches the emptiness check below, which is what
-          # produces the real message; let 2 kill the step here. Unguarded, a
-          # no-match killed this step under `pipefail` with no output at all.
-          tar tzf "${SDIST}" | sed 's|^[^/]*||' \
-            | { grep -E '^/tests/(.*/)?test_[^/]*\.py$' || test $? -eq 1; } \
-            | sort > "${RUNNER_TEMP}/sdist-tests.txt"
-
-          echo "test modules in checkout : $(wc -l < "${RUNNER_TEMP}/repo-tests.txt")"
-          echo "test modules in sdist    : $(wc -l < "${RUNNER_TEMP}/sdist-tests.txt")"
-
-          if [ ! -s "${RUNNER_TEMP}/sdist-tests.txt" ]; then
-            echo "::error::sdist ships no test modules at all — MANIFEST.in matches nothing"
-            exit 1
-          fi
-
-          MISSING="$(comm -23 "${RUNNER_TEMP}/repo-tests.txt" "${RUNNER_TEMP}/sdist-tests.txt")"
-          if [ -n "${MISSING}" ]; then
-            echo "::error::sdist is missing test modules that exist in the checkout:"
-            echo "${MISSING}"
-            echo "::error::Fix MANIFEST.in (recursive-include tests *.py)."
-            exit 1
-          fi
-          echo "sdist ships every test module in the checkout"
-
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dist
-          path: dist/
-          if-no-files-found: error
-
-  # 3. Install the built WHEEL (not -e, not the source tree) into a fresh venv on
-  #    every supported Python and run the suite against the installed artifact.
-  test-wheel:
-    name: test wheel (py${{ matrix.python-version }})
-    needs: [build]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
-    steps:
-      - name: Checkout (for the tests/ directory only)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: dist
-          path: dist/
-
-      - name: Install the wheel into a fresh venv and test it
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m venv "${RUNNER_TEMP}/wheel-venv"
-          VPY="${RUNNER_TEMP}/wheel-venv/bin/python"
-          "${VPY}" -m pip install --upgrade pip
-          WHEEL="$(ls dist/*.whl)"
-          echo "Installing wheel: ${WHEEL}"
-          "${VPY}" -m pip install "${WHEEL}" pytest
-          # Run from a clean dir that does NOT contain ./cdfibenchmark, so
-          # `import cdfibenchmark` resolves to the installed wheel, never source.
-          TESTDIR="${RUNNER_TEMP}/wheel-tests"
-          mkdir -p "${TESTDIR}"
-          cp -R tests "${TESTDIR}/tests"
-          # pyproject.toml comes too, matching the template. Without it this
-          # directory has NO ini file, so [tool.pytest.ini_options] never
-          # applies and empty_parameter_set_mark = fail_at_collect is inert --
-          # an empty parametrize goes back to being a silent skip in this job
-          # specifically. Measured in this exact layout: a planted empty
-          # parametrize gave `96 passed, 1 skipped`, exit 0. tests/ already
-          # comes from the checkout here, so taking pyproject.toml from it too
-          # changes nothing about what is under test: the WHEEL still supplies
-          # the package.
-          cp pyproject.toml "${TESTDIR}/pyproject.toml"
-          cd "${TESTDIR}"
-          "${VPY}" -m pytest tests --import-mode=importlib
-
-  # 4. Test the built SDIST, running the suite THAT SHIPPED INSIDE IT.
-  #
-  # This job exists because test-wheel cannot catch a broken sdist: it copies
-  # tests/ from the git checkout, so the tarball could ship zero tests and every
-  # gate would still be green. That is not hypothetical here — see the header.
-  # Nothing in this job comes from the repository.
-  test-sdist:
-    name: test sdist (py${{ matrix.python-version }})
-    needs: [build]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
-    steps:
-      # NOTE: deliberately NO actions/checkout. If the checkout is absent, it
-      # cannot leak into the thing under test.
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: dist
-          path: dist/
-
-      - name: Unpack the sdist, install it, and run its own suite
-        shell: bash
-        run: |
-          set -euo pipefail
-          SDIST="$(ls dist/*.tar.gz)"
-          echo "sdist under test: ${SDIST}"
-
-          WORK="${RUNNER_TEMP}/sdist-work"
-          mkdir -p "${WORK}"
-          tar xzf "${SDIST}" -C "${WORK}"
-          SRC="$(find "${WORK}" -maxdepth 1 -mindepth 1 -type d)"
-          echo "--- files the sdist actually contains ---"
-          tar tzf "${SDIST}"
-
-          # Fail with a sentence, not with 38 fixture errors. Without this the
-          # suite still "runs" — it just errors at collection in a way that reads
-          # like a broken test rather than broken packaging.
-          for required in tests/conftest.py tests/__init__.py README.md pyproject.toml; do
-            if [ ! -f "${SRC}/${required}" ]; then
-              echo "::error::sdist is missing ${required} — check MANIFEST.in (recursive-include tests *.py)"
-              exit 1
-            fi
-          done
-
-          python -m venv "${RUNNER_TEMP}/sdist-venv"
-          VPY="${RUNNER_TEMP}/sdist-venv/bin/python"
-          "${VPY}" -m pip install --upgrade pip
-          "${VPY}" -m pip install "${SDIST}" pytest
-
-          # Run from a directory containing ONLY what the sdist shipped, and NOT
-          # ./cdfibenchmark. Running from ${SRC} itself would put the unpacked
-          # source tree on sys.path and silently test that instead.
-          TESTDIR="${RUNNER_TEMP}/sdist-tests"
-          mkdir -p "${TESTDIR}"
-          cp -R "${SRC}/tests" "${TESTDIR}/tests"
-          cp "${SRC}/README.md" "${TESTDIR}/README.md"
-          # pyproject.toml comes along FROM THE TARBALL (not the repo — this job
-          # still has no checkout) because it carries [tool.pytest.ini_options],
-          # which sets --import-mode=importlib and empty_parameter_set_mark.
-          # Without an ini file here pytest would fall back to prepend mode and
-          # an empty parametrize would go back to being a silent green skip.
-          # That it ARRIVED and is LIVE is asserted below — not assumed.
-          cp "${SRC}/pyproject.toml" "${TESTDIR}/pyproject.toml"
-          cd "${TESTDIR}"
-
-          # Assert the import really came from the installed sdist, not source.
-          ORIGIN="$("${VPY}" -c 'import cdfibenchmark; print(cdfibenchmark.__file__)')"
-          echo "import resolved to    : ${ORIGIN}"
-          case "${ORIGIN}" in
-            *"/site-packages/"*) ;;
-            *) echo "::error::import cdfibenchmark resolved to '${ORIGIN}', not the installed sdist"; exit 1 ;;
-          esac
-
-          INSTALLED="$("${VPY}" -c 'import cdfibenchmark; print(cdfibenchmark.__version__)')"
-          EXPECTED="${GITHUB_REF_NAME#v}"
-          echo "installed __version__ : ${INSTALLED}"
-          echo "expected (from tag)   : ${EXPECTED}"
-          if [ "${INSTALLED}" != "${EXPECTED}" ]; then
-            echo "::error::Installed sdist reports '${INSTALLED}', expected '${EXPECTED}'"
-            exit 1
-          fi
-
-          # This check exists because the sentence that used to sit here was
-          # FALSE. It claimed --strict-markers meant "if the ini file stops
-          # reaching this directory, the job fails loudly instead of silently
-          # changing what gets collected." That is true in the sibling repos,
-          # which register markers and pass -m. It is not true here: this repo
-          # registers NO markers and passes NO -m, so --strict-markers has
-          # nothing to be strict about. Demonstrated -- replacing this
-          # directory's pyproject.toml with an EMPTY file still gives
-          # `96 passed`, exit 0. The comment asserted a protection the flag
-          # was not providing, which is the same false-assurance class the
-          # whole pipeline exists to close.
-          #
-          # So assert it directly instead of inferring it from a flag. The ini
-          # is load-bearing here: it carries empty_parameter_set_mark =
-          # fail_at_collect, and losing it silently re-enables the exact
-          # vacuity that setting was added to close -- an empty parametrize
-          # going back to a green skip.
-          #
-          # grep, not tomllib: this job runs on the 3.9 and 3.10 matrix legs
-          # too, where tomllib does not exist.
-          if ! grep -q '^\[tool\.pytest\.ini_options\]' pyproject.toml; then
-            echo "::error::pyproject.toml reached this directory but carries no"
-            echo "::error::[tool.pytest.ini_options] — the shipped suite is running unconfigured."
-            exit 1
-          fi
-          for key in addopts empty_parameter_set_mark; do
-            if ! grep -qE "^${key}[[:space:]]*=" pyproject.toml; then
-              echo "::error::[tool.pytest.ini_options] is present but has no '${key}'."
-              echo "::error::Either the tarball's pyproject.toml changed or MANIFEST.in stopped shipping it."
-              exit 1
-            fi
-          done
-          echo "pytest ini reached the run directory and carries its load-bearing keys"
-
-          # --strict-markers is kept for parity with the sibling repos and as a
-          # tripwire that arms itself the day this repo registers its first
-          # marker. It is inert today; the check above is what actually holds.
-          # --junitxml so the NEXT step can count what actually executed. The
-          # module-count check alone cannot: see the note there.
-          "${VPY}" -m pytest tests --import-mode=importlib --strict-markers \
-            --junitxml="${RUNNER_TEMP}/sdist-junit.xml"
-
-      - name: Assert the sdist suite is not silently truncated
-        shell: bash
-        run: |
-          set -euo pipefail
-          SDIST="$(ls dist/*.tar.gz)"
-          # grep exits 1 on no-match and 2 on error: tolerate 1 so SHIPPED is "0"
-          # and the emptiness check below produces the real message; let 2 abort.
-          # Was `|| true`, which swallowed 2 as well: SHIPPED became empty, the
-          # `-eq 0` test then errored instead of returning true, its branch was
-          # skipped, and the step exited 0 -- the gate PASSED on a broken grep.
-          SHIPPED="$(tar tzf "${SDIST}" | grep -cE '/tests/(.*/)?test_[^/]*\.py$' || test $? -eq 1)"
-          echo "test modules in sdist: ${SHIPPED}"
-          # This job deliberately has NO checkout, so it cannot compare the
-          # tarball against the repository — that comparison lives in `build`,
-          # which holds both. What this job CAN assert with nothing but the
-          # tarball is that MANIFEST.in did not match nothing at all, which is
-          # the failure that would otherwise let the suite "pass" by running
-          # zero tests. Deliberately not an absolute threshold.
-          if [ "${SHIPPED}" -eq 0 ]; then
-            echo "::error::sdist ships no test modules at all — MANIFEST.in matches nothing"
-            exit 1
-          fi
-
-          # The check above counts MODULES SHIPPED. It never counts EXECUTIONS,
-          # and those are different numbers: a suite where every test skips or
-          # is deselected exits 0 while shipping every module it should.
-          #   2 skipped in 0.00s     -> pytest exit code 0
-          #   1 deselected in 0.00s  -> pytest exit code 0
-          # So a marker change or a stray -m expression could silently deselect
-          # the entire suite and every gate here would stay green with the
-          # module count untouched. That is the same vacuity class as an empty
-          # parametrize, at job scale.
-          #
-          # FLOOR DERIVATION -- not a number picked to be safe. The rule is
-          # HALF of what the suite genuinely runs today, rounded down to a
-          # round number. Measured on this tarball: 96 tests executed under
-          # this job's exact invocation. Half is 48, so the floor is 45.
-          #
-          # Half, deliberately: the rejected `-lt 14` threshold sat at the
-          # exact count shipping that day, so deleting one test module failed
-          # the job with a packaging error for a deliberate source change.
-          # This one has ~51 tests of headroom -- you would have to delete more
-          # than half the suite before it complains, and no plausible refactor
-          # does that silently, while total deselection lands at 0 and trips it
-          # immediately.
-          FLOOR=45
-          EXECUTED="$(python - "${RUNNER_TEMP}/sdist-junit.xml" <<'PY'
-          import sys, xml.etree.ElementTree as ET
-          root = ET.parse(sys.argv[1]).getroot()
-          suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
-          total = sum(int(s.get("tests", 0)) for s in suites)
-          skipped = sum(int(s.get("skipped", 0)) for s in suites)
-          # Deselected tests never appear in the report at all, so they are
-          # absent from `total` -- which is exactly what makes this catch them.
-          print(total - skipped)
-          PY
-          )"
-          echo "tests actually executed: ${EXECUTED}  (floor ${FLOOR})"
-          if [ "${EXECUTED}" -lt "${FLOOR}" ]; then
-            echo "::error::the sdist suite executed only ${EXECUTED} tests, below the floor of ${FLOOR}."
-            echo "::error::Shipping every test module is not the same as running them. Check for a"
-            echo "::error::marker change or an -m expression that deselected the suite. If the suite"
-            echo "::error::genuinely shrank by more than half, re-derive FLOOR from the new count."
-            exit 1
-          fi
-
-  # 5. Publish to PyPI via OIDC Trusted Publisher. Needs all four gates green.
+  # 5. Publish to PyPI via OIDC Trusted Publisher. Needs every gate green.
   #    This is the ONLY job with id-token: write, and it uses no API token.
+  #    `needs: artifact-layouts` covers build, test-wheel and test-sdist: a
+  #    called workflow's job fails if any job inside it fails, so publish is
+  #    blocked by any one of them exactly as it was when they were listed here
+  #    individually. The `dist` artifact is uploaded inside the called workflow
+  #    and downloaded here — a reusable workflow shares the caller's run, so it
+  #    is the same artifact store.
   publish:
     name: Publish to PyPI (Trusted Publisher / OIDC)
-    needs: [verify-version, build, test-wheel, test-sdist]
+    needs: [verify-version, artifact-layouts]
     runs-on: ubuntu-latest
     environment: pypi
     # Overrides the top-level read-only default: the single elevated scope, here only.
