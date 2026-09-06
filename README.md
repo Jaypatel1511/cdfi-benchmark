@@ -35,9 +35,12 @@ tables by hand. cdfi-benchmark automates the entire workflow in Python.
     # by this README.
     institution = get_financials(cert=34352)
 
-    # Build peer group — the banks NEAREST the institution in assets inside a
-    # +/-50% window, not the largest ones in it. No API key needed. Peers are
-    # pinned to the institution's own report_date unless you pass another.
+    # Build peer group — the banks NEAREST the institution in assets, not the
+    # largest ones in its window. The group's real breadth is set by max_peers
+    # (50), NOT by the +/-50% asset window: for 98.1% of filers that window
+    # already holds more than 50 banks and does not bind at all. No API key
+    # needed. Peers are pinned to the institution's own report_date unless you
+    # pass another.
     peers = build_peer_group(institution, same_state=True)
 
     # How the group was chosen, in words, including that the window and the
@@ -114,6 +117,15 @@ grades NIM `N/A`. That is the intended behaviour, not a bug; see
 | NPL Ratio | `NCLNLS` / `LNLSGR` | <= 1.0% | **HOUSE** |
 | Reserve Coverage | `LNATRES` / `NCLNLS` | >= 100% | **HOUSE** |
 
+### Status is graded against thresholds, never against the peer group
+
+`status` compares the institution's value to the fixed thresholds in the table
+above. **It does not read the peer median or the percentiles**, which are
+reported alongside it and answer a different question. A metric can grade STRONG
+while sitting below the peer median, and ADEQUATE while sitting entirely outside
+the peer range — both happen on real banks at `20260630`. The rendered report
+carries the same sentence beside the table.
+
 ### Threshold provenance
 
 `tier1_ratio` is the **only** metric whose thresholds come from a published
@@ -184,11 +196,20 @@ Prompt Corrective Action (12 CFR 324.403).
 
 ## Asset Size Buckets
 
+**These bands are this tool's own (`HOUSE_ASSET_BUCKETS`).** They are not the
+FFIEC CRA small/intermediate/large-bank asset thresholds, not the FDIC
+community-bank definition, and not a UBPR peer-group band. "Large" in particular
+is a supervisory term that means specific, different things elsewhere; this
+bucket is not any of them.
+
 - micro — Under $50MM
 - small — $50MM to $250MM
 - medium — $250MM to $1B
 - large — $1B to $5B
 - mega — Over $5B
+
+The report renders the bucket with its boundaries and this attribution beside
+it, so the word never travels alone. `ASSET_BUCKETS` remains as an alias.
 
 ---
 

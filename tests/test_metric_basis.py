@@ -102,7 +102,16 @@ def test_computed_roaa_roae_are_gradeable_at_a_full_year_report_date():
 
 
 def test_period_neutral_metrics_are_always_gradeable():
-    """Stock ratios and the efficiency ratio carry no period error at all."""
+    """Period-neutral metrics carry no period error at all, so all are graded.
+
+    Three different reasons for period-neutrality are collapsed in this list and
+    the docstring used to call the whole group "stock ratios", which was true of
+    three of the five. `efficiency_ratio` is a ratio of two YTD flows over the
+    same period, so the period cancels; `tier1_ratio` is FDIC's published capital
+    ratio and has no flow period to begin with. What this test asserts is only
+    that none of them is DEGRADED for a period reason — see
+    test_basis_completeness.py for what each one's basis actually says.
+    """
     inst = _inst(report_date="20260331", tier1_ratio=12.2)
     for m in ("efficiency_ratio", "loans_to_deposits", "npl_ratio",
               "reserve_coverage", "tier1_ratio"):

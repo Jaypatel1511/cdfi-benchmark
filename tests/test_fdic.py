@@ -17,7 +17,9 @@ from unittest.mock import patch, MagicMock
 
 from cdfibenchmark import FDICAPIError, FDICResponseError
 from cdfibenchmark.data import fdic
-from cdfibenchmark.data.schema import InstitutionProfile
+from cdfibenchmark.data.schema import (
+    InstitutionProfile, BASIS_REJECTED_IMPLAUSIBLE, BASIS_UNREPORTED,
+)
 
 
 def _response(payload=None, *, raise_status=None, json_exc=None):
@@ -45,7 +47,8 @@ def _response(payload=None, *, raise_status=None, json_exc=None):
 #   NAME    = institution name (NOT INSTNAME, which isn't on these endpoints).
 # Do NOT "simplify" RBCT1J to a small round number: its dollar magnitude here is
 # exactly what makes the wrong-field-class guard (D1b) testable — a regression
-# that remaps RBCT1J into the ratio slot trips the [-100, 150] plausibility bound.
+# that remaps RBCT1J into the ratio slot trips the ratio plausibility bound
+# [_RATIO_MIN, _RATIO_MAX].
 WELL_FORMED_ROW = {
     "CERT": 99001,
     "NAME": "Broadway Federal Bank",
@@ -376,60 +379,172 @@ def test_tier1_slot_uses_leverage_ratio_not_dollar_field():
     assert mock_get.called
 
 
-def test_ratio_class_field_out_of_range_raises_naming_field():
-    """D1b: a dollar-magnitude value arriving in a ratio-class slot fails loud,
-    naming the offending field and value."""
+def test_ratio_class_field_out_of_range_degrades_the_field_not_the_call():
+    """D1b: a dollar-magnitude value in a ratio-class slot is REFUSED, and the
+    refusal costs one field — not the request, and not the peer group.
+
+    It used to raise FDICResponseError. The bound is a magnitude heuristic with
+    a measured 5.1% margin over the modern population's maximum, so it will be
+    wrong about a real bank eventually; making that wrongness fatal to every
+    metric on every peer was a worse outcome than the single nonsense cell it
+    avoided. Everything else on the row must survive intact.
+    """
     row = _leverage_row(RBC1AAJ=134229)   # wrong field class / API drift
     with patch.object(fdic.requests, "get",
                       return_value=_response(_wrap(row))) as mock_get:
-        with pytest.raises(FDICResponseError) as exc:
-            fdic.get_financials(25883)
-    msg = str(exc.value)
-    assert "RBC1AAJ" in msg
-    assert "134229" in msg
+        profile = fdic.get_financials(25883)
+    assert profile.tier1_ratio is None, "the implausible value was kept"
+    assert profile.total_assets == pytest.approx(655000), (
+        "one refused optional field discarded the rest of the row"
+    )
     assert mock_get.called
 
 
-@pytest.mark.parametrize("leverage,cert,name", [
-    (277.16, 59379, "CORNERSTONE COMMUNITY BANK"),
-    (194.25, 16281, "FIRST CITY BANK"),
-    (142.22, None, "the 20260331 population maximum"),
+def test_a_refused_value_is_recorded_not_swallowed():
+    """The cost of degrading is that the user does not watch it happen.
+
+    So the refusal is recorded: `implausible_fields` names the field, and the
+    basis line says a value WAS published and refused — which is a different
+    statement from "FDIC published nothing", and must not collapse into it.
+    """
+    row = _leverage_row(RBC1AAJ=134229)
+    with patch.object(fdic.requests, "get", return_value=_response(_wrap(row))):
+        refused = fdic.get_financials(25883)
+    row_absent = _leverage_row()
+    del row_absent["RBC1AAJ"]
+    with patch.object(fdic.requests, "get",
+                      return_value=_response(_wrap(row_absent))):
+        absent = fdic.get_financials(25883)
+
+    assert refused.implausible_fields == ("RBC1AAJ",)
+    assert absent.implausible_fields == ()
+    assert refused.tier1_ratio is absent.tier1_ratio is None
+    assert refused.metric_basis("tier1_ratio") == BASIS_REJECTED_IMPLAUSIBLE
+    assert absent.metric_basis("tier1_ratio") == BASIS_UNREPORTED
+    assert refused.metric_basis("tier1_ratio") != absent.metric_basis("tier1_ratio"), (
+        "a refused value is indistinguishable from an unreported one"
+    )
+
+
+@pytest.mark.parametrize("leverage,cert,name,repdte", [
+    (951.11,  59287, "ENTREBANK",                  "20220331"),
+    (758.67,  59265, "WATERFALL BANK",             "20210930"),
+    (277.16,  59379, "CORNERSTONE COMMUNITY BANK", "20260630"),
+    (194.25,  16281, "FIRST CITY BANK",            "20260630"),
+    (142.22,  59378, "EREBOR BANK N A",            "20260331"),
 ])
-def test_a_real_leverage_ratio_above_150_is_not_rejected(leverage, cert, name):
-    """The ratio-class bound was [-100, 150] and that was too tight.
+def test_a_real_leverage_ratio_in_the_upper_tail_is_not_refused(
+        leverage, cert, name, repdte):
+    """The modern population's real upper tail, and how close the bound is to it.
 
-    RBC1AAJ is Tier 1 capital over AVERAGE assets, so a de novo bank (whose
-    average assets trail its period-end assets) or one in wind-down holding
-    almost all equity legitimately exceeds 100%. Measured over every active
-    FDIC filer at six quarters: max RBC1AAJ was 105.01 / 117.66 / 117.29 /
-    119.35 / 142.22 / 277.16. The 150 bound fit five quarters by luck and
-    raised FDICResponseError on two real banks in the sixth.
+    RBC1AAJ is Tier 1 capital over adjusted AVERAGE assets, so a de novo bank
+    (whose average assets trail its period-end assets) legitimately runs into
+    the hundreds of percent. Swept 2026-09-05 over 46 quarters, 2015Q1-2026Q2,
+    every filer: the maximum is 951.11 — ENTREBANK, $33,708k of assets against
+    $32,138k of Tier 1 capital, a bank squarely inside the CDFI size band. That
+    is 5.1% below `_RATIO_MAX`, which is the whole reason a breach degrades
+    instead of raising.
 
-    This was invisible while `build_peer_group` fetched only the 55 LARGEST
-    banks in the window. Fetching the WHOLE window (B1) reaches these filers,
-    and a single one of them aborted the entire peer group — for subjects in
-    the $25MM-$75MM range, which is squarely the CDFI size band.
+    The bound was [-100, 150] through 0.3.0 and refused CORNERSTONE and FIRST
+    CITY, both real, on live 2026Q2 data.
     """
     row = _leverage_row(RBC1AAJ=leverage)
     with patch.object(fdic.requests, "get", return_value=_response(_wrap(row))):
         profile = fdic.get_financials(25883)
     assert profile.tier1_ratio == pytest.approx(leverage), (
-        f"a real leverage ratio of {leverage}% ({name}) was rejected as "
-        f"implausible"
+        f"a real leverage ratio of {leverage}% ({name}, CERT {cert} at {repdte}) "
+        f"was refused as implausible"
     )
+    assert profile.implausible_fields == ()
+
+
+@pytest.mark.parametrize("leverage,cert,name,repdte", [
+    (-6.20,  9956, "TRUST CO BANK",       "20160331"),
+    (-1.99, 58302, "FIRST NBC BANK",      "20170331"),
+    (-893.69, 33132, "STATE STREET B&T CO OF CT NA", "19901231"),
+    (-330.93, 33460, "NEW METROPOLITAN FSB",        "19911231"),
+])
+def test_a_real_negative_leverage_ratio_is_not_refused(leverage, cert, name, repdte):
+    """`_RATIO_MIN` had ZERO coverage before this test, at any value.
+
+    The guard's only parametrized case was 277.16 / 194.25 / 142.22 — all
+    positive — so the floor was never exercised in either direction, and -100.0
+    had never been derived from anything. It is now the mirror of `_RATIO_MAX`.
+
+    A negative leverage ratio is a real filing, not drift: an institution whose
+    Tier 1 capital is negative is insolvent on a capital basis, which is a thing
+    that happens and that a benchmarking tool should show. Swept 1984Q1-2026Q2,
+    169 quarters: 42 quarters have a minimum below -100 (the old floor), and
+    exactly one below -1,000 (-1,524.07, CERT 34128 at 19960331). At the modern
+    end the deepest value in 46 quarters is -6.20.
+    """
+    row = _leverage_row(RBC1AAJ=leverage)
+    with patch.object(fdic.requests, "get", return_value=_response(_wrap(row))):
+        profile = fdic.get_financials(25883)
+    assert profile.tier1_ratio == pytest.approx(leverage), (
+        f"a real negative leverage ratio of {leverage}% ({name}, CERT {cert} at "
+        f"{repdte}) was refused as implausible"
+    )
+    assert profile.implausible_fields == ()
+
+
+def test_the_bound_is_symmetric_and_both_ends_refuse():
+    """Both ends do work, and neither is a magic number sitting on its own.
+
+    `_RATIO_MIN` is the mirror of `_RATIO_MAX` because what this guard detects
+    is MAGNITUDE — RBCT1J runs to -7,789,337 (IndyMac, 20081231) as well as to
+    302,589,000, so a one-sided bound would miss half the swap it exists for.
+    """
+    assert fdic._RATIO_MIN == -fdic._RATIO_MAX, (
+        "the floor is not derived from the ceiling; it is a bare constant again"
+    )
+    for value in (fdic._RATIO_MAX + 0.01, fdic._RATIO_MIN - 0.01,
+                  302589000, -7789337):
+        row = _leverage_row(RBC1AAJ=value)
+        with patch.object(fdic.requests, "get",
+                          return_value=_response(_wrap(row))):
+            profile = fdic.get_financials(25883)
+        assert profile.tier1_ratio is None, f"{value} was admitted as a percentage"
+        assert profile.implausible_fields == ("RBC1AAJ",)
+    for value in (fdic._RATIO_MAX, fdic._RATIO_MIN):
+        row = _leverage_row(RBC1AAJ=value)
+        with patch.object(fdic.requests, "get",
+                          return_value=_response(_wrap(row))):
+            profile = fdic.get_financials(25883)
+        assert profile.tier1_ratio == pytest.approx(value), (
+            f"the bound {value} is exclusive; it must be inclusive"
+        )
 
 
 def test_ratio_class_guard_still_catches_a_dollar_magnitude_capital_figure():
-    """Widening the bound must not disarm the guard it widened.
+    """Degrading must not disarm the guard.
 
-    RBCT1J (Tier 1 capital, $k) reaches 302,589,000 — four orders of magnitude
-    outside the ratio band — which is the swap this guard exists to catch.
+    RBCT1J (Tier 1 capital, $k) reaches 302,589,000 — five orders of magnitude
+    outside the band — which is the swap this guard exists to catch. Measured at
+    20260630, the band refuses 4,295 of the 4,296 RBCT1J values in the
+    population, and refuses zero real RBC1AAJ values.
     """
     row = _leverage_row(RBC1AAJ=302589000)
     with patch.object(fdic.requests, "get", return_value=_response(_wrap(row))):
-        with pytest.raises(FDICResponseError) as exc:
-            fdic.get_financials(25883)
-    assert "RBC1AAJ" in str(exc.value)
+        profile = fdic.get_financials(25883)
+    assert profile.tier1_ratio is None
+    assert "RBC1AAJ" in profile.implausible_fields
+
+
+def test_a_systematic_field_swap_is_still_loud_across_a_batch():
+    """Degrading the ROW must not make a systematic swap quiet.
+
+    The objection to degrading is that a real API drift stops raising. It does
+    not stop being visible: every record breaches, so the metric goes N/A for
+    the whole batch and every profile names the field.
+    """
+    rows = [_leverage_row(CERT=c, RBC1AAJ=134229 + c) for c in (101, 102, 103)]
+    payload = {"data": [{"data": r} for r in rows]}
+    with patch.object(fdic.requests, "get", return_value=_response(payload)):
+        profiles = fdic.get_peer_financials(report_date="20260630")
+    assert len(profiles) == 3
+    assert all(p.tier1_ratio is None for p in profiles)
+    assert all(p.implausible_fields == ("RBC1AAJ",) for p in profiles)
 
 
 def test_dollar_class_field_large_value_not_bounded():

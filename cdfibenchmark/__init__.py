@@ -5,7 +5,7 @@ from cdfibenchmark.exceptions import (
 )
 from cdfibenchmark.data.schema import (
     InstitutionProfile, BenchmarkResult,
-    BENCHMARKS, ASSET_BUCKETS,
+    BENCHMARKS, ASSET_BUCKETS, HOUSE_ASSET_BUCKETS,
 )
 from cdfibenchmark.data.fdic import (
     get_institution, get_financials,
@@ -34,5 +34,5 @@ __all__ = [
     "compute_peer_metrics", "benchmark_institution", "rank_institution",
     "build_peer_group", "build_sample_peer_group",
     "generate_report", "summary_table",
-    "BENCHMARKS", "ASSET_BUCKETS",
+    "BENCHMARKS", "ASSET_BUCKETS", "HOUSE_ASSET_BUCKETS",
 ]
