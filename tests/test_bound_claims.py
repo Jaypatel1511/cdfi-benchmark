@@ -31,6 +31,26 @@ What is allowed:
   would replace a true statement with a false one. This is the one ruling in the
   brief that ordering this fix got backwards, and it is recorded here rather
   than argued in a commit message.
+
+WHY THIS WHOLE MODULE IS A REPO GATE
+------------------------------------
+The scan walks ``ROOT.rglob("*")`` — the repository tree. It cannot be pointed
+at an installed package instead, because what it certifies is the tree's PROSE:
+``.md`` files, which a wheel does not carry, and the comments in ``tests/``,
+which the artifact jobs only have by way of a ``cp -R tests`` in release.yml.
+Measured in a full checkout, the six bound-shaped pairs live in CHANGELOG.md
+(3), tests/test_fdic.py (1) and this file's own docstring (2); ``cdfibenchmark/``
+contributes NONE, because fdic.py's surviving sentence is symbolic
+(``[_RATIO_MIN, _RATIO_MAX]``), which is the end state the gate exists to reach.
+So "resolve it through the installed module" is not available to this scan: the
+installed module is precisely the part of the tree with nothing to find.
+
+Run 34002310309 failed all eight release jobs here. The wrong lesson would be to
+skip the module and move on: two assertions in it were never scan-based, and one
+of them guards a comment that SHIPS INSIDE THE WHEEL. Those two moved to
+``tests/test_shipped_source_claims.py``, where they read ``fdic.__file__`` and
+run in every context including the artifact jobs. What is left is the scan, and
+the scan is repo-only.
 """
 import io
 import re
@@ -54,6 +74,64 @@ _HISTORY_MARKERS = (
     "was ", "were ", "used to ", "previously", "no longer", "retired",
     "through 0.2", "through 0.3.0", "before this", "old comment", "old bound",
     "it replaces", "moved from",
+)
+
+#: Every surface the scan must be able to walk. ALL-OR-NOTHING, copied from the
+#: discipline in `test_package_claims.py:83-99`.
+#:
+#: Not `if path.exists()` per surface, and not a per-test skip. A scan that
+#: quietly drops the surfaces it cannot reach goes GREEN while checking a
+#: fraction of what it checks locally — which is what happened in the release
+#: jobs before this gate existed: `test_the_scan_finds_the_sites_it_is_supposed
+#: _to_guard` was the ONLY thing standing between a narrowed scan and a green
+#: run, and it is a vacuity self-check, not the gate. Without it the
+#: parametrized gate below would have gone green over `.py` files alone.
+#:
+#: So the module runs in full against a checkout or not at all, and when it does
+#: not run it NAMES what was missing.
+_REQUIRED_SURFACES = {
+    "pyproject.toml": ROOT / "pyproject.toml",
+    "README.md": ROOT / "README.md",
+    "CHANGELOG.md": ROOT / "CHANGELOG.md",
+    "cdfibenchmark/": ROOT / "cdfibenchmark",
+    "tests/": ROOT / "tests",
+}
+_MISSING = sorted(n for n, path in _REQUIRED_SURFACES.items() if not path.exists())
+
+#: Is ROOT a repository tree at all, or an artifact test directory?
+#:
+#: This distinction is the difference between a legitimate skip and a gate that
+#: went quiet when it should have gone red, and a bare `exists()` cannot draw it:
+#: "CHANGELOG.md is absent" is true both when we are testing a wheel and when
+#: somebody deleted CHANGELOG.md. Skipping on the second is the same
+#: false-assurance defect as failing on the first, just inverted — the gate
+#: reports "not applicable" about a tree it should have failed over.
+#:
+#: Two anchors, either sufficient, neither present in an artifact test directory:
+#:   cdfibenchmark/  the package source tree — a checkout has it, so does an
+#:                   unpacked sdist root; release.yml's wheel-tests and
+#:                   sdist-tests directories deliberately do NOT (that is the
+#:                   whole point of running from a clean dir).
+#:   .git/           a checkout even if the source tree itself were deleted.
+#:
+#: So the module skips ONLY where there is no repository to scan. Inside one,
+#: every required surface must be present or the module goes RED —
+#: `test_every_surface_the_scan_needs_is_present_in_a_repo_tree` says so by name.
+_IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
+
+#: True only in an installed-artifact run: surfaces missing AND no repo here.
+_SKIP = bool(_MISSING) and not _IS_REPO_TREE
+
+pytestmark = pytest.mark.skipif(
+    _SKIP,
+    reason=(
+        "no repository tree here (no cdfibenchmark/, no .git) and these surfaces "
+        "are absent, so the bound-claim scan cannot run in full: "
+        + ", ".join(_MISSING)
+        + " (expected in an installed-artifact run; the scan runs in the `test` "
+        "job, and the two assertions about shipped source moved to "
+        "tests/test_shipped_source_claims.py, which runs everywhere)"
+    ),
 )
 
 
@@ -179,7 +257,52 @@ def _is_history(hit) -> bool:
     return any(marker in lowered for marker in _HISTORY_MARKERS)
 
 
+#: The scan's result, computed ONCE at collection time.
+#:
+#: `pytestmark` is evaluated at SETUP, which is too late for a parametrize list:
+#: `empty_parameter_set_mark = fail_at_collect` fires during COLLECTION, so a
+#: zero-length list would abort the module with a collection error that the
+#: module-level skip cannot prevent. Hence the two-case shape below, and the
+#: reason it is written this way rather than `_hits()` inline:
+#:
+#: * scanning (a checkout) -> the real hits, and if the scan finds NONE
+#:   the list is empty and `fail_at_collect` ERRORS. That protection is the
+#:   whole point and it stays armed exactly where it can mean something.
+#: * not scanning (an artifact run) -> one placeholder param, which the
+#:   module-level skipif then skips. Not a green pass: the module reports
+#:   skipped, with the reason naming what was missing.
+#:
+#: `_hits()` is not even called in an artifact run, because it reads
+#: pyproject.toml unconditionally and would raise at import.
+_SCAN_HITS = [] if _SKIP else [h for h in _hits() if _is_bound_shaped(h)]
+_SCAN_PARAMS = (
+    [pytest.param(None, id="scan-did-not-run")] if _SKIP
+    else [pytest.param(h, id=f"{h['path']}:{h['line']}") for h in _SCAN_HITS]
+)
+
+
 # ── the gate ─────────────────────────────────────────────────────────────────
+def test_every_surface_the_scan_needs_is_present_in_a_repo_tree():
+    """The mutation gate: a deleted surface must be RED here, never a skip.
+
+    Reached only when `_SKIP` is False — i.e. we are in a repository tree — so
+    inside a checkout this is an unconditional assertion that every surface the
+    scan walks is really there. Delete CHANGELOG.md from a checkout and this
+    fails by name; that is what stops the module from answering "not applicable"
+    about a tree it should have failed over.
+
+    In `test-wheel` and `test-sdist` the module skips before reaching this, which
+    is correct: those directories are not repositories and never were.
+    """
+    assert not _MISSING, (
+        f"this is a repository tree (cdfibenchmark/ or .git/ is present) but the "
+        f"bound-claim scan cannot reach {', '.join(_MISSING)}. That is a deleted "
+        f"or moved surface, not an installed-artifact run, so it fails instead of "
+        f"skipping. Restore the surface, or remove it from _REQUIRED_SURFACES and "
+        f"say in the docstring what the scan no longer covers."
+    )
+
+
 def test_the_scan_finds_the_sites_it_is_supposed_to_guard():
     """A scan that finds nothing certifies nothing.
 
@@ -192,7 +315,7 @@ def test_the_scan_finds_the_sites_it_is_supposed_to_guard():
     whole gate is trying to reach — a sentence that cannot go stale because it
     names the constant instead of copying it.
     """
-    hits = [h for h in _hits() if _is_bound_shaped(h)]
+    hits = _SCAN_HITS
     assert hits, (
         "the bound-claim scan found NO bound-shaped pair anywhere in the tree. "
         "The bound is stated in prose in several places; a scan returning zero "
@@ -225,11 +348,7 @@ def test_the_scan_reads_python_prose_and_not_python_code():
     assert any("#" in text or text.startswith(('"', "'")) for _, text in segments)
 
 
-@pytest.mark.parametrize(
-    "hit",
-    [pytest.param(h, id=f"{h['path']}:{h['line']}")
-     for h in _hits() if _is_bound_shaped(h)],
-)
+@pytest.mark.parametrize("hit", _SCAN_PARAMS)
 def test_no_live_prose_states_a_bound_the_constant_contradicts(hit):
     """Every bound-shaped pair states the live constants, or is marked history.
 
@@ -248,37 +367,3 @@ def test_no_live_prose_states_a_bound_the_constant_contradicts(hit):
         f"{', '.join(repr(m.strip()) for m in _HISTORY_MARKERS)}).\n"
         f"  text: {hit['text'].strip()[:200]}"
     )
-
-
-def test_the_guard_no_longer_claims_it_separates_the_field_classes():
-    """The specific false justification this round was ordered to correct.
-
-    "1000 admits every observed leverage ratio with room" was refuted by the
-    package's own sweep: the observed maximum over 1984Q1-2026Q2 is 466,500.
-    A false justification for a WIDENED safety bound is the strongest form of
-    the comment-that-becomes-a-claim defect, so the sentence must not come back.
-    """
-    text = (ROOT / "cdfibenchmark" / "data" / "fdic.py").read_text()
-    assert "admits every observed leverage ratio" not in text, (
-        "fdic.py still claims the bound admits every OBSERVED leverage ratio. "
-        "The observed maximum is 466,500 (CERT 27213, 19880331); the claim is "
-        "true only of the modern population and must say so."
-    )
-    assert "466,500" in text, (
-        "fdic.py does not state the whole-history maximum it was corrected with"
-    )
-    assert "951.11" in text, (
-        "fdic.py does not state the MODERN maximum the bound is calibrated "
-        "against — which is 5.1% below the bound, not the 3.6x the retracted "
-        "comment implied"
-    )
-
-
-def test_the_floor_is_derived_from_the_ceiling_not_hand_set():
-    """`_RATIO_MIN` was -100.0, never derived and never exercised.
-
-    Whatever it is, it must stop being a bare number with no relationship to
-    anything. It is now the mirror of `_RATIO_MAX`, because what the guard
-    detects is magnitude.
-    """
-    assert fdic._RATIO_MIN == -fdic._RATIO_MAX
