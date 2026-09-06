@@ -89,14 +89,41 @@ _REQUIRED_SURFACES = {
 }
 _MISSING = sorted(n for n, path in _REQUIRED_SURFACES.items() if not path.exists())
 
+#: The all-or-nothing rule above was right and is unchanged. What it could not do
+#: was tell an artifact run apart from a DELETION: `exists()` is False in both,
+#: so deleting examples/ from a checkout made this whole module answer "skipped —
+#: expected in an installed-artifact run", which is a false statement about a
+#: checkout and leaves eleven gates certifying nothing while reporting no
+#: problem. A gate that skips when it should fail is the same defect as a gate
+#: that passes when it should fail.
+#:
+#: Either anchor means "there is a repository here", and release.yml's wheel-tests
+#: and sdist-tests directories have neither.
+_IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
+
 pytestmark = pytest.mark.skipif(
-    bool(_MISSING),
+    bool(_MISSING) and not _IS_REPO_TREE,
     reason=(
-        "repo-root surfaces absent, so these gates cannot run in full: "
+        "no repository tree here (no cdfibenchmark/, no .git) and these repo-root "
+        "surfaces are absent, so these gates cannot run in full: "
         + ", ".join(_MISSING)
         + " (expected in an installed-artifact run; they run in the `test` job)"
     ),
 )
+
+
+def test_every_surface_these_gates_need_is_present_in_a_repo_tree():
+    """A deleted surface must be RED here, never a skip.
+
+    Reached only inside a repository tree, where "examples/ is missing" can only
+    mean it was deleted or moved — never "we are testing a wheel".
+    """
+    assert not _MISSING, (
+        f"this is a repository tree (cdfibenchmark/ or .git/ is present) but these "
+        f"surfaces are unreadable: {', '.join(_MISSING)}. That is a deleted or "
+        f"moved surface, not an installed-artifact run, so it fails instead of "
+        f"skipping."
+    )
 
 #: Claims retired in earlier releases. None may reappear on ANY shipped surface.
 RETIRED_CLAIMS = ["CET1", "Tier 1 Capital Ratio", "INSTNAME"]

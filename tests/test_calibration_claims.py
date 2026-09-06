@@ -21,12 +21,124 @@ The measurement itself was re-derived on 2026-09-05 over the peer group B1
 produces (the 50 banks NEAREST CERT 34352 in assets), because the previous
 numbers described a cohort ~1.4x the subject's size and did not survive that
 fix: 22 of 50 WEAK with a 91.12% median became 13 of 50 with an 85.19% median.
+
+TWO KINDS OF ASSERTION LIVE HERE, AND THEY HAVE DIFFERENT CONTEXTS
+------------------------------------------------------------------
+* The grading assertions read NO files. They put the pinned number through the
+  installed package's own `BenchmarkResult.status`. They run everywhere,
+  unconditionally, including in `test-wheel` and `test-sdist`.
+* The three doc assertions read REPO PROSE — README.md and CHANGELOG.md — which
+  an installed-artifact test directory does not have in full. Each declares the
+  documents IT opens and is all-or-nothing over THAT set (`_needs` below), so
+  the README gate still runs in `test-sdist`, where README.md is present.
+
+Until this fix they did not share anything. Each one carried its own
+`if not path.exists(): pytest.skip(...)`, except `test_the_readme_does_not_assert
+_the_retracted_claim`, which carried no guard at all. Run 34002310309 shows both
+halves of what that costs, in the same eight jobs:
+
+* the unguarded one raised FileNotFoundError on README.md in `test-wheel`;
+* the guarded ones went GREEN in `test-wheel` having read neither document.
+
+The second is the worse outcome, and it is why the fix is not "add the missing
+`exists()` check to the third one". A gate that skips the surfaces it cannot
+reach and passes on the rest reports success over a fraction of its coverage —
+the silent narrowing this suite has a standing rule against. All-or-nothing over
+each gate's own coverage set, or the pass means nothing.
 """
 import pathlib
 
 import pytest
 
 from cdfibenchmark.data.schema import BENCHMARKS, BenchmarkResult
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+#: Every repo-prose document any gate in this module opens, resolved once.
+#: Scoped to these two files, not to the repo root as a whole: a gate should
+#: require what it reads and no more, or the reason it prints when it skips is
+#: not the truth about why it skipped.
+_DOC_SURFACES = {
+    "README.md": ROOT / "README.md",
+    "CHANGELOG.md": ROOT / "CHANGELOG.md",
+}
+
+
+#: See the long note in `test_bound_claims.py`: "the file is absent" is true both
+#: in an artifact run and when someone deleted it, and only the second should be
+#: red. Either anchor means "there is a repository here", and neither exists in
+#: release.yml's wheel-tests or sdist-tests directory.
+_IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
+
+
+def _needs(*surfaces):
+    """All-or-nothing over THIS gate's OWN coverage set.
+
+    The unit that must not half-run is a gate's coverage set, not the module.
+    So each gate declares the surfaces IT reads and skips only if one of those
+    is unavailable — never for a document it does not open.
+
+    That distinction is load-bearing here, and getting it wrong costs real
+    coverage in a real job. `test-sdist` copies README.md into its run directory
+    and not CHANGELOG.md. A single module-wide predicate over {README, CHANGELOG}
+    would therefore switch off the README gate in test-sdist — and the README is
+    the LIVE claim surface, the text PyPI renders, the one document whose
+    retracted figure most needs a gate standing over the artifact. Requiring
+    CHANGELOG.md in order to check README.md buys nothing and gives that up.
+
+    Gated on `_IS_REPO_TREE` as well as absence, so a DELETED README.md inside a
+    checkout is red rather than skipped: the file being missing is not by itself
+    evidence that missing is expected.
+
+    What this is NOT: a per-surface `exists()` inside a gate that spans several
+    surfaces. `test_the_shipped_docs_state_the_pinned_measurement` spans both
+    documents, so it declares both and skips both legs together. Letting its
+    CHANGELOG leg skip while its README leg passed is the silent narrowing —
+    a gate reporting success over half its surface — and it is what this module
+    did until now.
+    """
+    missing = sorted(n for n in surfaces if not _DOC_SURFACES[n].exists())
+    return pytest.mark.skipif(
+        bool(missing) and not _IS_REPO_TREE,
+        reason=(
+            "no repository tree here (no cdfibenchmark/, no .git) and this gate's "
+            "documents are absent from the run directory: " + ", ".join(missing)
+            + f" (gate reads: {', '.join(sorted(surfaces))}; expected in an "
+            "installed-artifact run, where it runs in the `test` job. The "
+            "grading assertions in this module run here regardless.)"
+        ),
+    )
+
+
+#: Named once so the decorators below read as declarations of what each gate
+#: opens. The grading assertions carry none of these: they read no files and
+#: must run against the shipped artifact.
+_needs_readme = _needs("README.md")
+_needs_changelog = _needs("CHANGELOG.md")
+_needs_both_docs = _needs("README.md", "CHANGELOG.md")
+
+
+def test_every_document_this_module_reads_is_present_in_a_repo_tree():
+    """A deleted document must be RED by name, never a skip.
+
+    The `_needs` gates already go red on a deletion rather than skipping, but
+    they do it by raising FileNotFoundError from inside whichever assertion
+    happens to open the file first. This says it in one place, in a sentence,
+    and matches `test_bound_claims.py` and `test_package_claims.py` so all three
+    repo-prose modules answer a deletion the same way.
+
+    Skipped in an artifact run, where there is no repository and nothing was
+    deleted.
+    """
+    if not _IS_REPO_TREE:
+        pytest.skip("no repository tree here; nothing was deleted, see _needs")
+    missing = sorted(n for n, path in _DOC_SURFACES.items() if not path.exists())
+    assert not missing, (
+        f"this is a repository tree (cdfibenchmark/ or .git/ is present) but "
+        f"{', '.join(missing)} is unreadable. That is a deleted or moved "
+        f"document, not an installed-artifact run, so it fails instead of "
+        f"skipping."
+    )
 
 #: The calibration measurement exactly as the README and CHANGELOG state it.
 #: Pinned with everything needed to re-run it.
@@ -89,17 +201,21 @@ def test_the_stated_weak_boundaries_actually_grade_weak():
     assert _grade(cfg["warning"]) != "WEAK", "the warning bound must be inside the band"
 
 
+@_needs_both_docs
 @pytest.mark.parametrize("doc", ["README.md", "CHANGELOG.md"])
 def test_the_shipped_docs_state_the_pinned_measurement(doc):
     """The pinned claim and the prose must not drift apart.
 
-    Both files ship in the sdist (MANIFEST.in includes them), so this runs in
-    the `test-sdist` job as well as the matrix `test` job — it is not a gate
-    with a single execution site.
+    The docstring here used to claim "Both files ship in the sdist (MANIFEST.in
+    includes them), so this runs in the `test-sdist` job as well". Half true and
+    the wrong half: both are IN the tarball, but test-sdist copies only
+    README.md into the directory it runs from, so CHANGELOG.md was never present
+    and this test's CHANGELOG.md leg silently skipped in that job for its whole
+    life. Being in the tarball is not the same as being in the run directory.
+
+    Now it does not skip one leg and run the other — see `_needs`.
     """
-    path = pathlib.Path(__file__).resolve().parent.parent / doc
-    if not path.exists():
-        pytest.skip(f"{doc} not present in this install")
+    path = _DOC_SURFACES[doc]
     text = path.read_text()
     claim = LTD_CALIBRATION
 
@@ -115,6 +231,7 @@ def test_the_shipped_docs_state_the_pinned_measurement(doc):
     )
 
 
+@_needs_readme
 def test_the_readme_does_not_assert_the_retracted_claim():
     """The README is the LIVE claim surface — it renders on PyPI.
 
@@ -122,7 +239,7 @@ def test_the_readme_does_not_assert_the_retracted_claim():
     which a current calibration paragraph should cite a median measured over a
     peer group of the 50 largest banks in the window.
     """
-    text = (pathlib.Path(__file__).resolve().parent.parent / "README.md").read_text()
+    text = _DOC_SURFACES["README.md"].read_text()
 
     assert "91.12" not in text, (
         "README still cites the 91.12% median, which was measured over a peer "
@@ -134,6 +251,7 @@ def test_the_readme_does_not_assert_the_retracted_claim():
     )
 
 
+@_needs_changelog
 def test_the_changelog_may_quote_the_false_claim_only_to_retract_it():
     """A changelog SHOULD name what it retracted — but must mark it false.
 
@@ -142,10 +260,7 @@ def test_the_changelog_may_quote_the_false_claim_only_to_retract_it():
     unmarked is the defect coming back. The first version of this gate banned
     the string outright and failed on this repository's own retraction entry.
     """
-    path = pathlib.Path(__file__).resolve().parent.parent / "CHANGELOG.md"
-    if not path.exists():
-        pytest.skip("CHANGELOG.md not present in this install")
-    text = path.read_text()
+    text = _DOC_SURFACES["CHANGELOG.md"].read_text()
 
     if "91.12" not in text:
         return
