@@ -31,9 +31,17 @@ tarball, python3.10::
 
 The obvious fix -- anchor on `.git` alone -- is WRONG, and measurably so. A
 GitHub zip download or `git archive` has no `.git` but DOES have `examples/`.
-Measured on `git archive HEAD | tar -x`::
+Measured on `git archive HEAD | tar -x`, at 0.3.1::
 
-    PYTHONPATH=. pytest tests -q   ->  321 passed, 3 skipped
+    PYTHONPATH=. pytest tests -q   ->  329 passed, 3 skipped
+
+(That figure read `321 passed, 3 skipped` when this module was written, and it
+was already wrong then: the same command at the commit that introduced the
+sentence also gives 329. Corrected in 0.3.1 by re-running it. The number is
+incidental to the argument -- what matters is that the layout HAS `examples/`
+and has no `.git` -- but a wrong measured number in a module about stale claims
+is the thing this repository keeps failing at, so it is re-run rather than
+deleted.)
 
 Under `.git`-only anchoring that layout stops classifying as a repository tree,
 the module skips as a unit, and the cert-binding gate goes silent on a layout
