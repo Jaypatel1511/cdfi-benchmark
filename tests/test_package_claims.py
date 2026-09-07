@@ -135,14 +135,50 @@ def _read_surface(name: str) -> dict:
     `layout.require`, so reaching here means the surface is readable; a silent
     per-file skip at THIS level would shrink the scan without shrinking the
     pass.
+
+    AND THE SAME RULE ONE LEVEL UP, WHICH THIS FUNCTION USED TO BREAK. For a
+    directory surface `layout.require` can only answer "the DIRECTORY is there".
+    The glob below then decides what is actually scanned, and a glob that
+    matches nothing returned `{}` -- so the gate asserted over an empty dict and
+    PASSED, with no skip, no reason and no signal. Measured at 6097238,
+    python3.10, in a full checkout:
+
+        mv examples/cdfi_benchmarking_demo.ipynb examples/…demo.ipynb.bak
+        PYTHONPATH=. pytest tests -q            -> 329 passed, 3 skipped
+                                                   (byte-identical to control)
+        PYTHONPATH=. pytest tests/test_package_claims.py -q -k wrong_institution
+                                                -> 7 passed, 14 deselected
+
+    The examples/ leg passed having read nothing. That leg is the ONLY automated
+    defence on the demo notebook -- `RETIRED_CLAIMS` is not swept over it (see
+    the note there) -- and it is the gate that caught the fabricated Carver row.
+    It disarmed on a rename, and would equally on a jupytext conversion to `.py`
+    or `.md`, or on the directory being emptied.
+
+    So an empty result is RED here, always, and never a skip. There is no
+    declaration mechanism for "present but contributes nothing": MANIFEST.in
+    declares that a surface is ABSENT, and `layout.require` has already ruled
+    that this one is present. A conversion or a rename is a real maintenance
+    signal -- update `_SURFACE_GLOBS` -- and the failure names the directory and
+    the pattern so the reader knows which.
     """
     if name not in _SURFACE_GLOBS:
         path = layout.SURFACES[name]
         return {name: path.read_text()}
     sub, pattern = _SURFACE_GLOBS[name]
     d = ROOT / sub
-    return {str(p.relative_to(ROOT)): p.read_text()
-            for p in sorted(d.rglob(pattern))}
+    found = {str(p.relative_to(ROOT)): p.read_text()
+             for p in sorted(d.rglob(pattern))}
+    assert found, (
+        f"surface {name!r} is present at {d} -- layout.require passed it -- but "
+        f"rglob({pattern!r}) matched NO files under it, so this gate would scan "
+        f"nothing and pass. A surface that contributes zero files to a scan is "
+        f"a silently disarmed gate, not a clean one. Either the files were "
+        f"renamed, moved or converted (restore them), or the surface genuinely "
+        f"holds a different file type now, in which case update _SURFACE_GLOBS "
+        f"and red-prove the new pattern."
+    )
+    return found
 
 
 def test_every_surface_this_module_reads_is_present_or_declared_absent():
@@ -182,11 +218,39 @@ def test_only_a_declared_omission_is_ever_excused():
 
     Reads no files, so it runs in EVERY layout -- checkout, tarball root,
     git archive, constructed sdist dir, wheel dir.
+
+    EXHAUSTIVE OVER `SURFACES`, NOT A HAND-TYPED SHORTLIST. This gate used to
+    name three never-excusable surfaces by hand, which left six of the nine in
+    `SURFACES` uncovered -- and each of those six was absorbable by one appended
+    MANIFEST.in line. Re-derived at the root of the 0.3.1 tarball, python3.10
+    (`tar xzf`, append the line, delete the file, `PYTHONPATH=. pytest tests/ -q`):
+
+        control                                        328 passed,  4 skipped
+        rm CHANGELOG.md                                  9 FAILED, 314 passed
+        prune CHANGELOG.md   + rm CHANGELOG.md         316 passed, 11 skipped
+        exclude setup.py     + rm setup.py             327 passed,  5 skipped
+        exclude CONTRIBUTING.md + rm CONTRIBUTING.md   327 passed,  5 skipped
+
+    One line turned nine named failures into exit 0. A hand-typed list inside a
+    vacuity guard is the exact shape this suite says it distrusts, and this
+    project has six recorded prior instances of a hand-typed list going stale.
+
+    So the set of surfaces a distribution may omit is `layout.EXCUSABLE_SURFACES`
+    -- consulted by `absence_is_declared` itself, so MANIFEST.in can no longer
+    widen it -- and this gate walks ALL of `SURFACES` against it. A surface added
+    to `SURFACES` is never-excusable until somebody deliberately says otherwise.
     """
-    for never_excused in ("README.md", "pyproject.toml", "cdfibenchmark/"):
+    assert layout.EXCUSABLE_SURFACES <= set(layout.SURFACES), (
+        f"EXCUSABLE_SURFACES names {sorted(set(layout.EXCUSABLE_SURFACES) - set(layout.SURFACES))} "
+        f"which is not in SURFACES, so this gate would walk past it without "
+        f"ever checking it"
+    )
+    for never_excused in sorted(set(layout.SURFACES) - layout.EXCUSABLE_SURFACES):
         assert layout.absence_is_declared(never_excused) is None, (
-            f"{never_excused} ships in the sdist and is in the repository; no "
-            f"layout may excuse its absence, but absence_is_declared did"
+            f"{never_excused} is not in layout.EXCUSABLE_SURFACES, so no layout "
+            f"may excuse its absence -- but absence_is_declared did. Either the "
+            f"policy set changed without this being re-argued, or MANIFEST.in "
+            f"has been given power to absorb a deletion."
         )
     excuse = layout.absence_is_declared("examples/")
     if layout.IS_SDIST_ROOT:
@@ -228,6 +292,37 @@ def test_the_manifest_reader_still_finds_the_prune_it_reads():
     )
 
 
+@layout.needs("MANIFEST.in")
+def test_manifest_excludes_no_surface_the_policy_requires_this_package_to_ship():
+    """Catch the absorbing edit where it is MADE, not where it lands.
+
+    `absence_is_declared` already refuses to excuse anything outside
+    `layout.EXCUSABLE_SURFACES`, so an appended `exclude setup.py` can no longer
+    turn a deletion green. But it would still stop setup.py SHIPPING, and the
+    first sign of that would be a confusing red at a tarball root that no longer
+    contains a file every gate still demands -- one release later, in an
+    artifact, rather than here, in the diff that caused it.
+
+    This runs wherever MANIFEST.in is readable, which includes the plain
+    checkout, so the edit fails in the pull request that makes it.
+
+    Red-proving this is one line: append `exclude setup.py` to MANIFEST.in.
+    """
+    excluded = layout.manifest_exclusions()
+    offenders = sorted(
+        s for s in layout.SURFACES
+        if s not in layout.EXCUSABLE_SURFACES
+        and layout._manifest_token(s) in excluded
+    )
+    assert not offenders, (
+        f"MANIFEST.in excludes {offenders} from the distribution, but "
+        f"layout.EXCUSABLE_SURFACES says this package ships them and every gate "
+        f"here still requires them. Shipping is a policy decision: change "
+        f"EXCUSABLE_SURFACES in tests/_layout.py deliberately, with the "
+        f"reasoning, or drop the exclusion."
+    )
+
+
 #: Claims retired in earlier releases. None may reappear on ANY shipped surface.
 #:
 #: SCOPE, STATED HONESTLY: the docstring above says no retired claim may appear
@@ -266,6 +361,29 @@ RETIRED_CLAIMS = ["CET1", "Tier 1 Capital Ratio", "INSTNAME"]
 FALSE_CERT_BINDINGS = [(57542, "Broadway Federal")]
 
 #: A line may NAME a false binding in order to correct or document it.
+#:
+#: SCOPE OF THE HOLE THIS LEAVES, CORRECTED. The exemption is applied PER LINE
+#: and is satisfied by any one of these words appearing ANYWHERE on the line, so
+#: a line that both asserts the false binding and contains an unrelated "was" is
+#: wholly exempt. The 0.3.1 round-3 commit message (cd9e4ee) described that as
+#: "latent for line-shaped files, real for minified JSON". THAT SENTENCE IS
+#: WRONG and is corrected here, where the code it describes lives. Measured at
+#: 6097238+round-4, python3.10, appending one line to README.md and running
+#: `PYTHONPATH=. pytest tests -q -k wrong_institution`:
+#:
+#:   "CERT 57542 is Broadway Federal Bank, and the sky was blue."
+#:                                                    -> 7 passed   (EXEMPT)
+#:   "CERT 57542 is Broadway Federal Bank, and the sky is  blue."
+#:                                                    -> 1 failed, 6 passed
+#:   "CERT 57542 is Broadway Federal Bank. It was reported elsewhere."
+#:                                                    -> 7 passed   (EXEMPT)
+#:
+#: Ordinary Markdown, not minified JSON. Every wrapped prose paragraph is
+#: line-shaped for this purpose, so the hole is live on the surfaces this gate
+#: most needs to cover. The DEFERRAL still stands -- narrowing the exemption
+#: (proximity to the binding, or a phrase-level match) is gate logic and belongs
+#: in 0.3.2 with its own red-proofs -- but it is deferred on an accurate
+#: description of what it leaves open, not a comforting one.
 _NEGATIONS = ("is not", "is NOT", "previously", "no longer", "was ",
               "not a real", "wrong", "belongs to")
 
@@ -351,21 +469,46 @@ def test_readme_does_not_hand_type_a_test_count():
 
 
 @layout.needs("README.md")
-def test_readme_does_not_claim_credit_union_coverage():
-    """The FDIC API covers FDIC-insured banks. Credit unions are NCUA."""
-    text = README.read_text().lower()
-    assert "credit union" not in text or "not" in text, "see explicit gate below"
-
-
-@layout.needs("README.md")
 def test_readme_credit_union_mention_is_an_exclusion_not_an_audience():
+    """The FDIC API covers FDIC-insured banks. Credit unions are NCUA.
+
+    THIS GATE ABSORBED A SIBLING THAT COULD NOT FAIL. Alongside it stood
+
+        assert "credit union" not in text or "not" in text, "see explicit gate below"
+
+    whose second limb is true of every README ever written -- "not" appears in
+    all of them -- so the assertion was unfailable. Demonstrated by the 0.3.1
+    audit: appending *"We proudly serve credit unions and CDFI loan funds."* to
+    README.md left it green. It was deleted rather than repaired, because the
+    only honest version of it is this gate, which already does the work per
+    line. README.md's "Every gate in this suite was run RED before the fix it
+    covers was written" could not be true of a gate with no red state, and that
+    sentence now carries the correction.
+
+    AND ITS OWN VACUITY IS CLOSED. This gate's assertion lives inside a loop
+    over lines that mention credit unions, so a README that stopped mentioning
+    them at all would pass while certifying nothing -- the same shape as the
+    surface-glob defect above, one level down. The exclusion is a scope limit
+    users rely on, so its DISAPPEARANCE is a regression in its own right: the
+    gate now requires the README to state it, and then requires every statement
+    of it to be an exclusion.
+
+    Red-proven both ways in 0.3.1; the mutations and counts are in the CHANGELOG.
+    """
     text = README.read_text()
-    for line in text.splitlines():
-        if "credit union" in line.lower():
-            assert any(w in line.lower() for w in ("no ", "not ", "never", "exclud")), (
-                f"README offers the tool to credit unions, which the FDIC API "
-                f"does not cover: {line.strip()!r}"
-            )
+    mentions = [line for line in text.splitlines() if "credit union" in line.lower()]
+    assert mentions, (
+        "README.md no longer mentions credit unions anywhere. This tool reads "
+        "the FDIC API, which covers FDIC-insured banks only; credit unions are "
+        "NCUA-regulated and out of scope, and the README has to say so. With no "
+        "mention at all this gate would loop over nothing and pass while "
+        "certifying nothing."
+    )
+    for line in mentions:
+        assert any(w in line.lower() for w in ("no ", "not ", "never", "exclud")), (
+            f"README offers the tool to credit unions, which the FDIC API "
+            f"does not cover: {line.strip()!r}"
+        )
 
 
 @layout.needs("README.md")
@@ -373,6 +516,96 @@ def test_readme_points_at_the_live_api_host():
     """banks.data.fdic.gov now 301-redirects to api.fdic.gov/banks."""
     from cdfibenchmark.data.schema import FDIC_API_BASE
     assert FDIC_API_BASE in README.read_text()
+
+
+def _build_requires() -> list:
+    """`[build-system].requires`, as a list of requirement strings.
+
+    Narrow and section-aware, and it RAISES rather than returning empty -- the
+    same rule as `_project_meta` above. A reader that answers "no requirements"
+    for a pyproject it failed to parse would turn the gate below into a silent
+    pass, which is the class of defect this module exists to close. Not tomllib:
+    the CI matrix runs 3.9 and 3.10, where it does not exist.
+    """
+    text = PYPROJECT.read_text()
+    lines, out, in_bs, collecting = text.splitlines(), [], False, False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and not collecting:
+            in_bs = stripped == "[build-system]"
+            continue
+        if not in_bs:
+            continue
+        if stripped.startswith("#"):
+            continue
+        if not collecting and re.match(r"^requires\s*=", stripped):
+            collecting = True
+            stripped = stripped.split("=", 1)[1].strip()
+        if collecting:
+            out += re.findall(r'"([^"]+)"', stripped)
+            if "]" in stripped:
+                return out
+    raise AssertionError(
+        "could not read [build-system].requires from pyproject.toml; this gate "
+        "must not pass without reading it"
+    )
+
+
+@layout.needs("pyproject.toml")
+def test_the_declared_build_requirement_can_read_this_metadata():
+    """A build requirement is a claim, and this one was false by 19 versions.
+
+    Every packaging field this project has lives in the PEP 621 `[project]`
+    table. setuptools only learned to read that table in 61.0.0, and
+    `[build-system].requires` said `setuptools>=42`.
+
+    The failure is silent and total. Measured, python3.10, on the unpacked 0.3.1
+    sdist, `pip wheel --no-deps --no-build-isolation` in a venv pinned to each:
+
+        setuptools 60.10.0 -> "Successfully built UNKNOWN", a wheel named
+                              UNKNOWN-0.0.0 whose only entries are its own
+                              dist-info -- no package code -- exit 0
+        setuptools 61.0.0  -> "Successfully built cdfi-benchmark"
+
+    and with the floor itself as the variable, system setuptools 59.6.0,
+    `python -m build --wheel --no-isolation`:
+
+        requires = ["setuptools>=42"] -> builds UNKNOWN-0.0.0, exit 0
+        requires = ["setuptools>=61"] -> ERROR Unmet dependencies: setuptools>=61,
+                                         found 59.6.0 -- refuses to build
+
+    This gate holds the DECLARATION true. It cannot make every tool honour it:
+    `pip wheel --no-build-isolation` checks no build requirement at all and
+    still builds UNKNOWN on an old setuptools under either floor. Stating that
+    limit here rather than implying the gate closes the hole outright.
+
+    No existing gate could see it, because no gate read the build requirement
+    and CI always builds in an isolated env holding the newest setuptools. That
+    is the shape of every defect this suite keeps finding: a written claim, no
+    gate over it, and a failure mode that exits 0.
+
+    Red-proving this is one edit: put `setuptools>=42` back.
+    """
+    requires = _build_requires()
+    setuptools_reqs = [r for r in requires if r.lower().replace("_", "-").startswith("setuptools")]
+    assert setuptools_reqs, (
+        f"[build-system].requires is {requires} and names no setuptools "
+        f"requirement, but build-backend is setuptools.build_meta and every "
+        f"packaging field is in the [project] table it has to read"
+    )
+    for req in setuptools_reqs:
+        m = re.search(r">=\s*(\d+)", req)
+        assert m, (
+            f"the setuptools build requirement {req!r} states no lower bound, so "
+            f"nothing stops a build with a setuptools too old to read the "
+            f"[project] table -- which produces an UNKNOWN-0.0.0 wheel with no "
+            f"package code in it, and exits 0"
+        )
+        assert int(m.group(1)) >= 61, (
+            f"the setuptools build requirement is {req!r}, but PEP 621 "
+            f"[project] support landed in setuptools 61.0.0. Measured: 60.10.0 "
+            f"builds this sdist into an empty UNKNOWN-0.0.0 wheel and exits 0."
+        )
 
 
 @layout.needs("pyproject.toml")

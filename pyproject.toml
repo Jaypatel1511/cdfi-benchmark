@@ -1,5 +1,46 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+# setuptools>=61, NOT >=42. 61.0.0 is the first release that reads the PEP 621
+# [project] table below; everything older ignores it and falls back to whatever
+# setup() passes, which since 0.3.1 is nothing. The old floor therefore declared
+# as buildable a whole range of setuptools that produces an empty, wrongly-named
+# distribution and exits 0.
+#
+# MEASURED, python3.10, on the unpacked 0.3.1 sdist, system setuptools 59.6.0:
+#
+#   pip wheel --no-deps --no-build-isolation, venv pinned to each version
+#     setuptools 60.10.0 -> "Successfully built UNKNOWN"
+#                           UNKNOWN-0.0.0-py3-none-any.whl whose entire content
+#                           is UNKNOWN-0.0.0.dist-info/{METADATA,WHEEL,
+#                           top_level.txt,RECORD}. Zero package modules.
+#     setuptools 61.0.0  -> "Successfully built cdfi-benchmark"
+#
+#   python -m build --wheel --no-isolation
+#     requires = ["setuptools>=42"] -> "Successfully built
+#                                       UNKNOWN-0.0.0-py3-none-any.whl", exit 0
+#     requires = ["setuptools>=61"] -> ERROR Unmet dependencies (checked against
+#                                       /usr/bin/python3): setuptools>=61,
+#                                       found 59.6.0     <- refuses to build
+#
+# WHAT THIS FIX DOES AND DOES NOT DO, because a build requirement is a
+# DECLARATION and not every tool enforces it:
+#   * `python -m build` checks it, so the silent empty wheel becomes a refusal.
+#   * `pip install`/`pip wheel` WITH isolation resolve it, so the correct
+#     setuptools is fetched (verified: "Collecting setuptools>=61 ... installed
+#     setuptools-84.0.0").
+#   * `pip wheel --no-build-isolation` does NOT check build requirements at all
+#     and still produces UNKNOWN on an old setuptools under either floor. Nothing
+#     declarable in this file can change that; what changes is that the file now
+#     states the truth about what it needs.
+#
+# CI never saw any of this: `python -m build` on a clean runner provisions the
+# newest setuptools, so the declared floor is never the version that runs. It
+# surfaced while installing this project's own sdist into a venv created with
+# --system-site-packages, where a visible setuptools 59.6.0 satisfied the old
+# >=42 and was used to "build" the package.
+#
+# `test_the_declared_build_requirement_can_read_this_metadata` in
+# tests/test_package_claims.py holds the floor at >= 61.
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]

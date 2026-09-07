@@ -270,7 +270,15 @@ its shape" (`FDICResponseError`):
 
     PYTHONPATH=. pytest tests/ -v
 
-Every gate in this suite was run RED before the fix it covers was written.
+Every gate in this suite was run RED before the fix it covers was written, and a
+gate that cannot be made to fail is treated as a defect in the gate rather than
+as coverage. One had slipped past that rule and is recorded here rather than
+quietly removed: a credit-union check written as
+`assert "credit union" not in text or "not" in text`, whose second limb is true
+of every README ever written, so it had no red state it could have been run in.
+It was found by audit and deleted in 0.3.1. The sibling gate that does the same
+work line by line survives, was red-proven in both directions, and now also
+fails if this README stops stating that exclusion anywhere.
 
 ### Known issue in the 0.3.0 source tarball
 

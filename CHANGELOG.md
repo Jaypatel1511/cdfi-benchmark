@@ -11,10 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Packaging, release metadata and prose. **No library code changed.**
 `cdfibenchmark/` in this release is byte-identical to the package inside the
-published 0.3.0 wheel — verified by hashing every `.py` file under the package
-directory in both, which gives the same digest:
+published 0.3.0 wheel:
 
     sha256 3f90077f200206a1d09929b868df2af43a6da325eb3e695da35f6f4ebbde9083
+
+A digest is only evidence if it can be recomputed, so here is exactly how it is
+aggregated — every `.py` under the package directory, ordered by its path
+RELATIVE TO THAT DIRECTORY, each path fed to the hash before its bytes. Run from
+the repository root, with the published wheel downloaded from PyPI beside it:
+
+    python3 - <<'PY'
+    import hashlib, pathlib, zipfile
+    def digest(pairs):
+        h = hashlib.sha256()
+        for name, data in sorted(pairs):
+            h.update(name.encode()); h.update(data)
+        return h.hexdigest()
+    pkg = pathlib.Path("cdfibenchmark")
+    print("tree :", digest((str(p.relative_to(pkg)), p.read_bytes())
+                           for p in pkg.rglob("*.py")))
+    z = zipfile.ZipFile("cdfi_benchmark-0.3.0-py3-none-any.whl")
+    print("wheel:", digest((n[len("cdfibenchmark/"):], z.read(n)) for n in z.namelist()
+                           if n.startswith("cdfibenchmark/") and n.endswith(".py")))
+    PY
+    -> tree : 3f90077f200206a1d09929b868df2af43a6da325eb3e695da35f6f4ebbde9083
+       wheel: 3f90077f200206a1d09929b868df2af43a6da325eb3e695da35f6f4ebbde9083
+
+11 files on each side. The number was published in this section without its
+method, which made it unreproducible: the two most obvious aggregations (bytes
+alone, and repository-relative paths plus bytes) give
+`0e1728af…` and `f10659e3…` instead.
 
 No metric, grade, threshold, peer-selection rule or rendered value moves.
 Nothing computed under 0.3.0 needs re-running.
@@ -24,6 +50,119 @@ It matters only if you downloaded the 0.3.0 *source tarball* and ran the test
 suite that ships inside it.
 
 ### Fixed
+
+- **`PKG-INFO` was checked by filename, so a stray one excused real deletions —
+  and said something false about the tree while doing it.** The rule that lets a
+  distribution excuse a missing surface identified an unpacked sdist as
+  `(ROOT / "PKG-INFO").is_file()`. In a git checkout, python3.10:
+
+      : > PKG-INFO && rm -rf examples
+      PYTHONPATH=. pytest tests -q   ->  328 passed, 4 skipped   exit 0
+
+  A zero-byte file forgave a deleted directory, and the skip it printed read
+  *"this is an unpacked sdist root (PKG-INFO is present)"* with `.git` sitting
+  right there. The identification now tests three things and needs all of them:
+  the file parses as RFC-822 distribution metadata with `Metadata-Version` and
+  `Name`; that `Name` matches `[project].name` in this tree's `pyproject.toml`
+  (PEP 503 normalised); and there is no `.git`. The reason string quotes what
+  was observed rather than announcing a conclusion, so a skip printed here can
+  no longer assert something untrue about the tree it is printed in. Each part
+  is load-bearing, measured on the same mutation: zero-byte file in a checkout
+  → 2 failed; a *valid* PKG-INFO copied from the real sdist into a checkout →
+  2 failed; another package's PKG-INFO with no `.git` → 2 failed; the genuine
+  sdist tree (valid PKG-INFO, no `.git`) → 328 passed, 4 skipped, still
+  correctly excused. `.git` is a disqualifier only — it can refuse an excuse,
+  never grant one — because on its own it would leave a forged PKG-INFO
+  excusing deletions anywhere outside a checkout. Verified that no routine
+  command puts PKG-INFO in a checkout root: `setup.py sdist`, `setup.py
+  egg_info`, `python -m build`, `python -m build --sdist` and
+  `pip install -e .` all write it under `cdfi_benchmark.egg-info/` or not at
+  all.
+
+- **The wrong-cert scan passed vacuously when a surface's glob matched
+  nothing.** `layout.require` can only answer "the directory is there"; the
+  glob inside it decided what was actually read, and an empty match returned an
+  empty dict that the gate then asserted over. Measured at the previous commit,
+  python3.10, in a full checkout:
+
+      mv examples/cdfi_benchmarking_demo.ipynb examples/cdfi_benchmarking_demo.ipynb.bak
+      PYTHONPATH=. pytest tests -q   ->  329 passed, 3 skipped  (control: identical)
+      PYTHONPATH=. pytest tests/test_package_claims.py -q -k wrong_institution
+                                     ->  7 passed, 14 deselected
+
+  The `examples/` leg passed having read nothing — no skip, no reason. That leg
+  is the only automated defence on the demo notebook (retired claims are not
+  swept over `examples/`), and it is the gate that caught the fabricated peer
+  row this release removes. It disarmed on a rename, and would equally on a
+  jupytext conversion or an emptied directory. A surface that contributes zero
+  files to a scan is now RED by name, and there is no declaration that can
+  excuse it — `MANIFEST.in` declares absence, and this surface is present.
+  Red-proven four ways: rename → 1 failed; conversion to `.md` → 1 failed;
+  emptied directory → 1 failed; and the same shape forced on `tests/` → 1
+  failed.
+
+- **One line in `MANIFEST.in` could absorb the deletion of almost anything.**
+  The guard on the excusing mechanism named three never-excusable surfaces by
+  hand, leaving six of the nine in `SURFACES` absorbable. Re-derived at the root
+  of the 0.3.1 tarball, python3.10 — unpack, append the line, delete the file,
+  `PYTHONPATH=. pytest tests/ -q`:
+
+      control                                        328 passed,  4 skipped
+      rm CHANGELOG.md                                  9 FAILED, 314 passed
+      prune CHANGELOG.md      + rm CHANGELOG.md      316 passed, 11 skipped
+      exclude setup.py        + rm setup.py          327 passed,  5 skipped
+      exclude CONTRIBUTING.md + rm CONTRIBUTING.md   327 passed,  5 skipped
+
+  One appended line turned nine named failures into exit 0. Which surfaces a
+  distribution may omit is a policy, and nothing in the tree states it except
+  the very file being edited, so it is now written down once as
+  `layout.EXCUSABLE_SURFACES` and consulted by the excusing rule itself:
+  `MANIFEST.in` can only ever narrow the excuse, never widen it. The guard walks
+  all of `SURFACES` against that set instead of a shortlist, so a surface added
+  to `SURFACES` is never-excusable by default. A second gate fails on the
+  MANIFEST edit itself, in the pull request that makes it, rather than one
+  release later inside an artifact. With both in place the three absorptions
+  above give 10 failed, 3 failed and 3 failed.
+
+- **A gate that could not fail, and a claim in `README.md` that it could.**
+  `test_readme_does_not_claim_credit_union_coverage` asserted
+  `"credit union" not in text or "not" in text`; the second limb is true of
+  every README ever written, so the assertion had no red state. Appending
+  *"We proudly serve credit unions and CDFI loan funds."* left it PASSED while
+  its sibling gate failed on the same text. It is deleted rather than repaired,
+  because the honest version of it is the sibling. `README.md`'s "Every gate in
+  this suite was run RED before the fix it covers was written" could not be true
+  of it, and that sentence now records the exception instead of implying none.
+  The surviving gate had a vacuity of its own — its assertion sits inside a loop
+  over lines mentioning credit unions, so a README that stopped mentioning them
+  would have passed while certifying nothing — and it now requires the exclusion
+  to be stated. Red-proven both ways: the "we proudly serve" line → 1 failed;
+  deleting every credit-union line → 1 failed.
+
+- **`[build-system].requires` said `setuptools>=42`, and setuptools cannot read
+  this project's metadata until 61.0.0.** Every packaging field lives in the PEP
+  621 `[project]` table; setuptools older than 61 ignores that table entirely
+  and falls back to what `setup()` passes, which since this release is nothing.
+  The result is not an error. Measured, python3.10, on the unpacked 0.3.1 sdist:
+
+      pip wheel --no-deps --no-build-isolation, venv pinned per version
+        setuptools 60.10.0 -> "Successfully built UNKNOWN"
+                              UNKNOWN-0.0.0-py3-none-any.whl containing only
+                              its own dist-info — no package code — exit 0
+        setuptools 61.0.0  -> "Successfully built cdfi-benchmark"
+
+      python -m build --wheel --no-isolation, system setuptools 59.6.0
+        requires = ["setuptools>=42"] -> built UNKNOWN-0.0.0, exit 0
+        requires = ["setuptools>=61"] -> ERROR Unmet dependencies:
+                                         setuptools>=61, found 59.6.0
+
+  The floor is now 61 and a gate holds it there. No CI job could have seen this:
+  `python -m build` on a clean runner provisions the newest setuptools, so the
+  declared floor is never the version that runs. Stated precisely, because a
+  build requirement is a declaration and not every tool enforces it: `python -m
+  build` now refuses instead of shipping an empty wheel, `pip` with isolation
+  resolves the correct setuptools, and `pip wheel --no-build-isolation` checks
+  no build requirement at all and is unaffected by either floor.
 
 - **The test suite shipped inside the sdist failed when run from the tarball
   root, and no CI job in the release that shipped it could see the failure.**
@@ -123,10 +262,12 @@ fails when run from the tarball root:
     cd cdfi_benchmark-0.3.0 && PYTHONPATH=. pytest tests/ -q
     -> 2 failed, 319 passed, 3 skipped
 
-The two failures are `test_package_claims.py::test_every_surface_these_gates_
-need_is_present_in_a_repo_tree` and `test_package_claims.py::test_no_surface_
-binds_a_cert_to_the_wrong_institution[57542-Broadway Federal]`. Both fail for
-the same reason and it is a defect in the *gates*, not in the package: they
+The two failures, on their own lines so they can be copied and run:
+
+    tests/test_package_claims.py::test_every_surface_these_gates_need_is_present_in_a_repo_tree
+    tests/test_package_claims.py::test_no_surface_binds_a_cert_to_the_wrong_institution[57542-Broadway Federal]
+
+Both fail for the same reason and it is a defect in the *gates*, not in the package: they
 demanded `examples/`, a directory `MANIFEST.in` deliberately prunes from the
 sdist. Nothing they were testing is actually wrong in 0.3.0.
 
@@ -151,6 +292,24 @@ tarball and running its suite from the tarball root. 0.3.1 fixes it; the same
 invocation against 0.3.1 passes.
 
 ### Changed
+
+- **A deferral's stated scope was wrong and is corrected.** The round-3 commit
+  message describing the cert gate's per-line negation exemption said it was
+  "latent for line-shaped files, real for minified JSON". It is real for
+  ordinary Markdown. Appending one line to `README.md`, python3.10,
+  `PYTHONPATH=. pytest tests -q -k wrong_institution`:
+
+      "CERT 57542 is Broadway Federal Bank, and the sky was blue."  -> 7 passed
+      "CERT 57542 is Broadway Federal Bank, and the sky is  blue."  -> 1 failed
+      "CERT 57542 is Broadway Federal Bank. It was reported elsewhere."
+                                                                   -> 7 passed
+
+  Every wrapped prose paragraph is line-shaped for this purpose, so the hole is
+  live on the surfaces the gate most needs to cover. The deferral itself stands
+  — narrowing the exemption is gate logic and belongs in 0.3.2 with its own
+  red-proofs — but it is now deferred on an accurate description of what it
+  leaves open, recorded beside the code it describes rather than in a commit
+  message. A commit message cannot be corrected in place; this can.
 
 - The floor guarding against a silently-deselected sdist suite was re-derived.
   Its justification still read "96 tests executed under this job's exact
