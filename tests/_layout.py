@@ -89,8 +89,32 @@ So the question is now asked directly, in three parts, all of which must hold:
 Part 3 is a DISQUALIFIER, not a second proxy for the question: it can only ever
 refuse an excuse, never grant one. It was rejected as the whole remedy for
 exactly the reason a proxy is the wrong shape -- on its own it closes the git
-checkout and leaves a stray or forged PKG-INFO excusing deletions anywhere else.
-It costs nothing in normal development, because no routine command writes
+checkout and leaves a STRAY PKG-INFO excusing deletions anywhere else.
+
+WHAT PARTS 1 AND 2 DO NOT CLOSE, STATED PLAINLY. They close the STRAY file --
+the zero-byte or arbitrary one that a command or a slip leaves behind. They do
+not close a FORGED one, and the sentence here used to claim they did. Three
+lines of correct, hand-written metadata satisfy content and identity, and a
+`git archive` tree has no `.git` to trip provenance. Measured, python3.10:
+
+    git archive HEAD | tar -x -C <dir> && cd <dir>
+    PYTHONPATH=. pytest tests -q          ->  330 passed, 3 skipped   (control)
+
+    printf 'Metadata-Version: 2.1\nName: CDFI_Benchmark\nVersion: 0.3.1\n' >PKG-INFO
+    rm -rf examples
+    PYTHONPATH=. pytest tests -q          ->  329 passed, 4 skipped   exit 0
+
+The deletion was excused. Three things bound what that buys and are the reason
+this is recorded rather than fixed here: the blast radius is `EXCUSABLE_SURFACES`
+-- `examples/` and nothing else, so no surface this package ships can be
+absorbed this way, which `test_only_a_declared_omission_is_ever_excused` holds
+exhaustively; the forgery is a deliberate act, not a slip, and this module's
+subject is telling a deletion from a declared omission, not defending against an
+author who is lying to their own test suite; and closing it needs a signature or
+a trusted index, which is a different mechanism from reading a file. So the
+claim is narrowed to what was measured -- stray, not forged.
+
+Part 3 costs nothing in normal development, because no routine command writes
 PKG-INFO to a checkout root. Measured on a copy of this repo, python3.10, each
 in a fresh copy (`cp -a`), checking for `./PKG-INFO` afterwards:
 
@@ -139,10 +163,19 @@ CONSEQUENTLY
                              switched off in a directory that HAS both.
 """
 import email.parser
+import fnmatch
 import pathlib
 import re
 
 import pytest
+
+try:                      # 3.11+
+    import tomllib
+except ModuleNotFoundError:
+    try:                  # 3.9/3.10 with the backport available
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 
 #: The tree under test. `tests/` sits directly under it in every layout.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -202,29 +235,64 @@ IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
 EXCUSABLE_SURFACES = frozenset({"examples/"})
 
 
+#: `[project].name` when it is written as a double-quoted or single-quoted
+#: basic string, with an optional trailing comment. Both quote styles and a
+#: trailing `#` comment are ordinary, valid TOML, and the previous pattern --
+#: `^name\s*=\s*"([^"]+)"\s*$` -- read neither. That is the cheap question
+#: standing in for the real one, in the module whose whole subject is not doing
+#: that. Measured at the root of the 0.3.1 tarball, python3.10, editing only the
+#: name line in pyproject.toml and running `PYTHONPATH=. pytest tests -q`:
+#:
+#:     control                              329 passed, 4 skipped
+#:     name = 'cdfi-benchmark'                2 FAILED, 328 passed, 3 skipped
+#:     name = "cdfi-benchmark"  # PyPI name   2 FAILED, 328 passed, 3 skipped
+#:
+#: A real, correct sdist was refused its own excuse. It fails SAFE -- loud red,
+#: caught long before a tag -- which is why this was a defect and not a blocker.
+#: Multi-line and literal (triple-quoted) strings are still not read: they are
+#: not a spelling anyone writes a project name in, and an unread name returns ""
+#: which refuses the excuse, so the failure direction is unchanged.
+_NAME_LINE = re.compile(r"""^name\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:\#.*)?$""")
+
+
 def _project_name() -> str:
     """`[project].name` as declared in THIS tree, or "" if it cannot be read.
 
-    Deliberately narrow and section-aware, the same shape and for the same
-    reason as `_project_meta` in `test_package_claims.py`: it must never answer
-    with a name it did not actually read. "" makes the identity check below
-    fail, which makes the tree NOT an sdist root, which makes an absence RED
-    rather than excused -- the safe direction.
+    It must never answer with a name it did not actually read. "" makes the
+    identity check below fail, which makes the tree NOT an sdist root, which
+    makes an absence RED rather than excused -- the safe direction, preserved on
+    every path through this function including a parser raising.
+
+    WHY THIS NOW USES `tomllib` WHERE IT EXISTS. `_project_meta` in
+    `test_package_claims.py` already does, and hand-rolling a second, narrower
+    reader of the same key in the same tree is how two answers to one question
+    drift apart. The hand-rolled reader here is the fallback for 3.9 and 3.10,
+    where no TOML parser is in the standard library and the CI matrix still runs
+    -- the same reason `_project_meta` carries one.
     """
     path = SURFACES["pyproject.toml"]
     if not path.is_file():
         return ""
+    text = path.read_text()
+
+    if tomllib is not None:
+        try:
+            name = tomllib.loads(text)["project"]["name"]
+        except Exception:
+            return ""      # unparsable or absent -> read nothing -> excuse nothing
+        return name if isinstance(name, str) else ""
+
     in_project = False
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("["):
             in_project = stripped == "[project]"
             continue
         if not in_project:
             continue
-        m = re.match(r'^name\s*=\s*"([^"]+)"\s*$', stripped)
+        m = _NAME_LINE.match(stripped)
         if m:
-            return m.group(1)
+            return m.group(1) if m.group(1) is not None else m.group(2)
     return ""
 
 
@@ -305,6 +373,40 @@ def manifest_exclusions():
         elif parts[0] == "exclude" and len(parts) >= 2:
             out.update(parts[1:])
     return frozenset(out)
+
+
+def manifest_excludes_surface(surface: str) -> str:
+    """The MANIFEST.in pattern that would keep `surface` out of the sdist, or "".
+
+    GLOB-AWARE, AND DELIBERATELY NOT USED BY `absence_is_declared`.
+    `manifest_exclusions` returns the directive arguments verbatim, and
+    MANIFEST.in arguments are GLOB PATTERNS, not literal names: `exclude *.md`
+    removes README.md, CHANGELOG.md and CONTRIBUTING.md from the distribution.
+    A literal `token in exclusions` test cannot see that. Measured in a checkout,
+    python3.10, appending one line to MANIFEST.in:
+
+        exclude *.md
+        PYTHONPATH=. pytest tests -q      ->  330 passed, 3 skipped   (silent)
+
+    and the sdist that edit builds loses CHANGELOG.md and CONTRIBUTING.md, which
+    the tarball-root run then reports as `10 failed`.
+
+    THE TWO CALLERS PULL IN OPPOSITE DIRECTIONS, WHICH IS WHY THERE ARE TWO
+    FUNCTIONS. Matching more patterns makes the OFFENDER gate
+    (`test_manifest_excludes_no_surface_the_policy_requires_this_package_to_ship`)
+    stricter -- more RED, in the pull request that makes the edit. It would make
+    `absence_is_declared` LOOSER -- a glob would start excusing absences, which
+    is a deletion going green. So the excuse path keeps the literal test and
+    this one is separate, and that asymmetry is the point rather than an
+    oversight.
+
+    Returns the matching pattern (truthy) so a failure can name what matched.
+    """
+    token = _manifest_token(surface)
+    for pattern in sorted(manifest_exclusions()):
+        if token == pattern or fnmatch.fnmatchcase(token, pattern):
+            return pattern
+    return ""
 
 
 def absence_is_declared(surface: str):

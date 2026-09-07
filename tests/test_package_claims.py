@@ -306,16 +306,35 @@ def test_manifest_excludes_no_surface_the_policy_requires_this_package_to_ship()
     This runs wherever MANIFEST.in is readable, which includes the plain
     checkout, so the edit fails in the pull request that makes it.
 
-    Red-proving this is one line: append `exclude setup.py` to MANIFEST.in.
+    THE SENTENCE ABOVE WAS FALSE FOR GLOB-SHAPED EXCLUSIONS UNTIL NOW, and the
+    correction is `layout.manifest_excludes_surface`. This gate compared each
+    surface's token against the directive arguments with `in`, a LITERAL test,
+    while MANIFEST.in arguments are glob patterns. Measured in a checkout,
+    python3.10, appending one line and running `PYTHONPATH=. pytest tests -q`:
+
+        exclude *.md   (before this change)  ->  330 passed, 3 skipped, silent
+        exclude *.md   (after  this change)  ->  1 failed, 329 passed, 3 skipped
+
+    The edit was never harmless: the sdist it builds ships no CHANGELOG.md and
+    no CONTRIBUTING.md, and running that tarball's own suite from its root gives
+    `10 failed`. `test-sdist` in release.yml catches that before a tag, so this
+    was an overstatement rather than an open hole -- but "where it is MADE" is
+    now true of the shape that actually gets typed.
+
+    Red-proving this is one line: append `exclude setup.py` (literal) or
+    `exclude *.md` (glob) to MANIFEST.in.
     """
-    excluded = layout.manifest_exclusions()
-    offenders = sorted(
-        s for s in layout.SURFACES
-        if s not in layout.EXCUSABLE_SURFACES
-        and layout._manifest_token(s) in excluded
-    )
+    offenders = {}
+    for surface in sorted(layout.SURFACES):
+        if surface in layout.EXCUSABLE_SURFACES:
+            continue
+        pattern = layout.manifest_excludes_surface(surface)
+        if pattern:
+            offenders[surface] = pattern
     assert not offenders, (
-        f"MANIFEST.in excludes {offenders} from the distribution, but "
+        f"MANIFEST.in keeps these surfaces out of the distribution — surface: "
+        f"the directive argument that matches it — "
+        f"{ {k: v for k, v in sorted(offenders.items())} }. "
         f"layout.EXCUSABLE_SURFACES says this package ships them and every gate "
         f"here still requires them. Shipping is a policy decision: change "
         f"EXCUSABLE_SURFACES in tests/_layout.py deliberately, with the "
@@ -468,6 +487,45 @@ def test_readme_does_not_hand_type_a_test_count():
     )
 
 
+#: Phrases that ASSERT NON-COVERAGE. A credit-union mention in README prose must
+#: carry one of them.
+#:
+#: WHY THIS IS A PHRASE LIST AND NOT THE NEGATION-WORD TUPLE IT REPLACES.
+#: The gate used to accept any of `"no "`, `"not "`, `"never"`, `"exclud"`
+#: appearing ANYWHERE on the line. That is the same per-line, any-word shape as
+#: `_NEGATIONS` above, and it admitted the exact sentence the gate exists to
+#: refuse. Measured at 98d071a, python3.10, appending one line to README.md and
+#: running `PYTHONPATH=. pytest tests -q`:
+#:
+#:   "We proudly serve credit unions, with no setup required."
+#:                                          -> 330 passed, 3 skipped   (ADMITTED)
+#:   "Credit unions are welcome; nothing is excluded from our audience."
+#:                                          -> 330 passed, 3 skipped   (ADMITTED)
+#:   "We proudly serve credit unions and CDFI loan funds."
+#:                                          -> 1 failed, 329 passed, 3 skipped
+#:
+#: An unrelated "no setup" and an unrelated "excluded" each bought a pass. These
+#: phrases cannot be satisfied by an incidental negation elsewhere in the
+#: sentence: each one states that something is not covered. `"exclud"` is
+#: deliberately NOT among them -- "nothing is excluded" is how the second
+#: sentence above got in.
+_EXCLUSION_PHRASES = (
+    "not covered", "does not cover", "do not cover", "cannot cover",
+    "not supported", "does not support", "do not support",
+    "out of scope", "outside the scope", "not in scope",
+    "not included", "does not include",
+)
+
+#: An inline code span. A mention inside one is QUOTED CODE, not prose offering
+#: the tool to anybody -- README.md quotes the deleted `assert "credit union"
+#: not in text or "not" in text` in order to record it, and a gate that cannot
+#: distinguish a quotation from an assertion forces the documentation out. This
+#: is the same allowance `_CERT_SCAN_SURFACES` makes for CHANGELOG.md, narrowed
+#: to a span rather than a whole surface: the span is REMOVED and the rest of
+#: the line is still judged, so `` `x` We serve credit unions `` stays red.
+_CODE_SPAN = re.compile(r"`[^`]*`")
+
+
 @layout.needs("README.md")
 def test_readme_credit_union_mention_is_an_exclusion_not_an_audience():
     """The FDIC API covers FDIC-insured banks. Credit unions are NCUA.
@@ -479,35 +537,64 @@ def test_readme_credit_union_mention_is_an_exclusion_not_an_audience():
     whose second limb is true of every README ever written -- "not" appears in
     all of them -- so the assertion was unfailable. Demonstrated by the 0.3.1
     audit: appending *"We proudly serve credit unions and CDFI loan funds."* to
-    README.md left it green. It was deleted rather than repaired, because the
-    only honest version of it is this gate, which already does the work per
-    line. README.md's "Every gate in this suite was run RED before the fix it
-    covers was written" could not be true of a gate with no red state, and that
-    sentence now carries the correction.
+    README.md left it green. It was deleted rather than repaired.
 
     AND ITS OWN VACUITY IS CLOSED. This gate's assertion lives inside a loop
     over lines that mention credit unions, so a README that stopped mentioning
-    them at all would pass while certifying nothing -- the same shape as the
-    surface-glob defect above, one level down. The exclusion is a scope limit
-    users rely on, so its DISAPPEARANCE is a regression in its own right: the
-    gate now requires the README to state it, and then requires every statement
+    them at all would pass while certifying nothing. The exclusion is a scope
+    limit users rely on, so its DISAPPEARANCE is a regression in its own right:
+    the gate requires the README to state it, and then requires every statement
     of it to be an exclusion.
 
-    Red-proven both ways in 0.3.1; the mutations and counts are in the CHANGELOG.
+    AND THE HOLE IT INHERITED IS CLOSED TOO -- IT HAD THE SAME DEFECT AS THE
+    ASSERTION IT REPLACED, ONE SCREEN AWAY. Accepting any of `"no "`, `"not "`,
+    `"never"`, `"exclud"` anywhere on the line let two sentences through that
+    offer the tool to credit unions; the measurements are recorded at
+    `_EXCLUSION_PHRASES` above. It now takes a phrase that states non-coverage,
+    the mention is read from PROSE with inline code spans removed, and the
+    exclusion must be stated in prose at least once rather than only inside a
+    quotation.
+
+    WHAT IT STILL DOES NOT CATCH, SO THE CLAIM MATCHES THE CODE:
+
+    * A sentence that offers the tool AND contains an exclusion phrase --
+      *"We serve credit unions; other lenders are not covered."* -- passes. That
+      is an adversarial sentence rather than the drift this gate defends
+      against, and deciding it needs to parse the sentence, not match it.
+    * The scan is per LINE. A "credit unions" that wraps across a newline is not
+      seen at all. Every mention in this README is on one line, and a
+      hard-wrapped one would be a silent miss, not a false pass on a mention it
+      read.
+    * A false RED is the failure direction everywhere else: rewording the
+      exclusion to a phrase not on the list fails loudly, which is one line to
+      fix and is the trade this suite takes deliberately.
+
+    Red-proven both ways; the mutations and counts are at `_EXCLUSION_PHRASES`
+    and in the CHANGELOG.
     """
     text = README.read_text()
-    mentions = [line for line in text.splitlines() if "credit union" in line.lower()]
-    assert mentions, (
-        "README.md no longer mentions credit unions anywhere. This tool reads "
-        "the FDIC API, which covers FDIC-insured banks only; credit unions are "
-        "NCUA-regulated and out of scope, and the README has to say so. With no "
-        "mention at all this gate would loop over nothing and pass while "
-        "certifying nothing."
+    prose = {}
+    for line in text.splitlines():
+        stripped = _CODE_SPAN.sub(" ", line)
+        if "credit union" in stripped.lower():
+            prose[line] = stripped
+
+    assert prose, (
+        "README.md no longer mentions credit unions in prose anywhere (inline "
+        "code spans are not counted -- a quotation is not a statement of "
+        "scope). This tool reads the FDIC API, which covers FDIC-insured banks "
+        "only; credit unions are NCUA-regulated and out of scope, and the "
+        "README has to say so. With no mention at all this gate would loop over "
+        "nothing and pass while certifying nothing."
     )
-    for line in mentions:
-        assert any(w in line.lower() for w in ("no ", "not ", "never", "exclud")), (
-            f"README offers the tool to credit unions, which the FDIC API "
-            f"does not cover: {line.strip()!r}"
+    for line, stripped in prose.items():
+        assert any(ph in stripped.lower() for ph in _EXCLUSION_PHRASES), (
+            f"this README line mentions credit unions without stating that they "
+            f"are not covered -- the FDIC API does not reach them, so a mention "
+            f"that is not an exclusion is an offer: {line.strip()!r}. It must "
+            f"carry one of {list(_EXCLUSION_PHRASES)}. A bare negation "
+            f"elsewhere in the sentence is not enough; that is exactly what let "
+            f"'with no setup required' and 'nothing is excluded' through."
         )
 
 

@@ -139,6 +139,170 @@ suite that ships inside it.
   to be stated. Red-proven both ways: the "we proudly serve" line → 1 failed;
   deleting every credit-union line → 1 failed.
 
+  **AND THE SURVIVING GATE HAD THE SAME DEFECT AS THE ONE IT REPLACED.** The
+  paragraph above presented it as the honest version without recording what it
+  admitted. It accepted any of `"no "`, `"not "`, `"never"`, `"exclud"` anywhere
+  on the line — the same per-line, any-word shape as the `_NEGATIONS` exemption
+  three screens above it in the same file. Measured at 98d071a, python3.10,
+  appending one line to `README.md` and running `PYTHONPATH=. pytest tests -q`:
+
+      "We proudly serve credit unions, with no setup required."
+                                                 -> 330 passed, 3 skipped
+      "Credit unions are welcome; nothing is excluded from our audience."
+                                                 -> 330 passed, 3 skipped
+      "We proudly serve credit unions and CDFI loan funds."
+                                                 -> 1 failed, 329 passed, 3 skipped
+
+  Two sentences that offer the tool to institutions the FDIC API does not cover
+  went green, one of them on the word `excluded` itself. That is closed here
+  rather than deferred: the gate now requires a phrase that STATES non-coverage
+  (`not covered`, `does not cover`, `out of scope`, …; `exclud` is deliberately
+  not among them), reads the mention from prose with inline code spans removed
+  so the README can still quote the deleted assertion, and requires the
+  exclusion to appear in prose at least once rather than only inside a
+  quotation. Re-measured after the change, same commands, `pytest tests -q`:
+
+      "We proudly serve credit unions, with no setup required."   1 failed, 329 passed, 3 skipped
+      "Credit unions are welcome; nothing is excluded …"          1 failed, 329 passed, 3 skipped
+      "We proudly serve credit unions and CDFI loan funds."       1 failed, 329 passed, 3 skipped
+      "`ignore me` We proudly serve credit unions."               1 failed, 329 passed, 3 skipped
+      the exclusion clause deleted from the audience list         1 failed, 329 passed, 3 skipped
+      the exclusion weakened to "NCUA-regulated, which is a
+        different regulator"                                      1 failed, 329 passed, 3 skipped
+
+  **What it still does not catch, stated because the last version of this entry
+  did not:** a sentence that offers the tool AND contains an exclusion phrase —
+  *"We serve credit unions; other lenders are not covered."* — passes, because
+  deciding that needs the sentence parsed rather than matched. The scan is per
+  LINE, so a mention hard-wrapped across a newline is not seen at all. And
+  rewording the exclusion to a phrase not on the list fails LOUDLY, which is the
+  direction this suite takes deliberately. All three limits are written into the
+  gate's docstring next to the mutations that measured them.
+
+  The separate `_NEGATIONS` exemption in the cert-binding gate has the same
+  shape and is still deferred to 0.3.2, on the accurate description already
+  recorded at `tests/test_package_claims.py`.
+
+- **A report gate that certified nothing, and a `README.md` sentence asserting
+  there had been only one such gate.** `test_house_thresholds_are_marked_house_on_the_report`
+  asserted `"this tool's own" in report.lower() or "house" in report.lower()` —
+  a substring anywhere in the rendered document — as a stand-in for "the
+  threshold lines carry their attribution". Measured, python3.10, reducing the
+  HOUSE branch of `_threshold_line` (`cdfibenchmark/report/generator.py:116`) to
+  `" — not a regulatory or supervisory standard"`:
+
+      PYTHONPATH=. pytest tests -q   ->  330 passed, 3 skipped
+                                         (byte-identical to control)
+
+  Seven of the eight thresholds lost their attribution and nothing moved. What
+  held the assertion up was `cdfibenchmark/peers/selector.py:159`, a sentence
+  about *peer-group selection* — "…nearest-neighbour selection are this tool's
+  own choices (HOUSE)…" — that renders on every report. The gate now scans the
+  `**Benchmark:**` lines, requires the literal
+  `**this tool's own threshold (HOUSE)**` on each HOUSE line, derives how many
+  lines must carry it from `BENCHMARKS` instead of a typed count, and requires
+  every unmarked line to name an instrument. Red-proven: the mutation above →
+  `1 failed, 329 passed, 3 skipped`; replacing the marker with the *size-band*
+  wording, the nearest thing to a near-miss on the page → `1 failed, 329 passed,
+  3 skipped`. **No library code changed** — the rendered page already
+  distinguishes its three HOUSE attributions in words, so only the test was
+  asking the cheap question.
+
+  `README.md`'s "**One** had slipped past that rule" was written in the same
+  commit that this gate survived, and was false when written. That section no
+  longer gives a number: the instances found so far are listed, and the sentence
+  says why a tally there is not a claim this project can support.
+
+- **A threshold gate whose loop can empty, one edit away from empty.**
+  `test_cited_thresholds_name_an_instrument` looped over the entries in
+  `BENCHMARKS` declaring a non-HOUSE source. Exactly one does. Measured,
+  python3.10, setting `tier1_ratio`'s `source` to `"HOUSE"`:
+
+      PYTHONPATH=. pytest tests -q -k cited_thresholds_name_an_instrument
+        -> 1 passed, 24 deselected     (checking nothing)
+
+  The mutation itself was already red elsewhere — the full suite gave
+  `3 failed, 329 passed, 1 skipped` — so this was a latent vacuity, not an open
+  hole. It is fixed anyway: coverage in another module is not this gate working.
+  With the guard, the same mutation gives `1 failed, 24 deselected`.
+
+  Found by an AST sweep of every test function in `tests/` for three shapes:
+  assertions that sit ONLY inside a loop, `assert A or B`, and
+  `all(...)` / `not any(...)` / `not in` over a collection that could be empty.
+  Every flagged function was then ruled on individually. No count is given here
+  and none should be inferred: the sweep was throwaway audit tooling, is not
+  committed, and a tally nobody can re-run is the class of claim this release
+  spent most of its diff removing.
+
+  How each ruling was made, since a reading is not a measurement: the suite's
+  AST was rewritten to count how many times every assertion executes, and re-run
+  — the instrumented copy gave the same `330 passed, 3 skipped`. No flagged gate
+  executed zero assertions, so nothing in this tree is vacuous today. The one
+  above is recorded because it is one edit from vacuous; every other flagged
+  loop either iterates a literal written into the test, or is preceded by an
+  assertion that the collection is non-empty.
+
+- **`tests/_layout.py` claimed the `PKG-INFO` remedy closes a FORGED file. It
+  closes a STRAY one.** The module docstring said the `.git`-only alternative
+  was rejected because it "leaves a stray or forged PKG-INFO excusing deletions
+  anywhere else", implying the content and identity checks close both. They do
+  not. Measured, python3.10:
+
+      git archive HEAD | tar -x -C <dir> && cd <dir>
+      PYTHONPATH=. pytest tests -q                     ->  330 passed, 3 skipped
+      printf 'Metadata-Version: 2.1\nName: CDFI_Benchmark\nVersion: 0.3.1\n' >PKG-INFO
+      rm -rf examples
+      PYTHONPATH=. pytest tests -q                     ->  329 passed, 4 skipped
+
+  Three hand-written lines satisfy content and identity, and a `git archive`
+  tree has no `.git` to trip provenance. The claim is narrowed to what was
+  measured, and the docstring now records the bound: `EXCUSABLE_SURFACES` limits
+  the blast radius to `examples/`, so no surface this package ships can be
+  absorbed this way; the forgery is a deliberate act rather than a slip; and
+  closing it needs a signature or a trusted index, which is a different
+  mechanism from reading a file. Prose fix, no behaviour change.
+
+- **The MANIFEST gate said it catches the absorbing edit "where it is MADE". It
+  was literal-token only.** `MANIFEST.in` arguments are glob patterns, and the
+  gate compared surface names against them with `in`. Measured in a checkout,
+  python3.10:
+
+      echo 'exclude *.md' >>MANIFEST.in
+      PYTHONPATH=. pytest tests -q   ->  330 passed, 3 skipped     (silent)
+
+  and the sdist that edit builds ships no `CHANGELOG.md` and no
+  `CONTRIBUTING.md`, which its own tarball-root run reports as `10 failed`.
+  `test-sdist` catches that before a tag, so this was an overstatement rather
+  than an open hole. Matching is now glob-aware via
+  `layout.manifest_excludes_surface`, used ONLY by the offender gate: a broader
+  match there means more RED in the pull request that makes the edit, while the
+  same broadening inside `absence_is_declared` would let a glob start EXCUSING
+  deletions, so the excuse path deliberately keeps the literal test. Red-proven
+  after the change: `exclude *.md` → `1 failed, 329 passed, 3 skipped`;
+  `exclude setup.py` (the literal case, checked for regression) → `1 failed,
+  329 passed, 3 skipped`.
+
+- **`layout._project_name` read only one of the ways `[project].name` is
+  written, and refused a real sdist its own excuse.** It matched
+  `^name\s*=\s*"([^"]+)"\s*$` and never used `tomllib`, even on 3.11/3.12 where
+  `test_package_claims._project_meta` does. Two ordinary, valid TOML spellings
+  broke it. Measured at the root of the 0.3.1 tarball, python3.10, editing only
+  the name line:
+
+      control                              ->  329 passed, 4 skipped
+      name = 'cdfi-benchmark'              ->  2 failed, 328 passed, 3 skipped
+      name = "cdfi-benchmark"  # PyPI name ->  2 failed, 328 passed, 3 skipped
+
+  A correct source distribution was told its own `PKG-INFO` did not identify it.
+  It fails SAFE — loud red, long before a tag — which is why this was a defect
+  and not a blocker, but it is the cheap-question-nearby shape in the file whose
+  entire subject is not asking cheap questions. It now parses with `tomllib`
+  where that exists and falls back to a pattern accepting both quote styles and
+  a trailing comment on 3.9/3.10. After the change both spellings give
+  `329 passed, 4 skipped`, and a name that is NOT this package still refuses the
+  excuse (`name = "some-other-package"` → `2 failed, 328 passed, 3 skipped`),
+  so the safe direction is unchanged.
+
 - **`[build-system].requires` said `setuptools>=42`, and setuptools cannot read
   this project's metadata until 61.0.0.** Every packaging field lives in the PEP
   621 `[project]` table; setuptools older than 61 ignores that table entirely

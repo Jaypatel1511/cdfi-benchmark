@@ -272,13 +272,42 @@ its shape" (`FDICResponseError`):
 
 Every gate in this suite was run RED before the fix it covers was written, and a
 gate that cannot be made to fail is treated as a defect in the gate rather than
-as coverage. One had slipped past that rule and is recorded here rather than
-quietly removed: a credit-union check written as
-`assert "credit union" not in text or "not" in text`, whose second limb is true
-of every README ever written, so it had no red state it could have been run in.
-It was found by audit and deleted in 0.3.1. The sibling gate that does the same
-work line by line survives, was red-proven in both directions, and now also
-fails if this README stops stating that exclusion anywhere.
+as coverage. Gates that had slipped past that rule are recorded here rather than
+quietly removed.
+
+**No count is given, and the previous wording's count was wrong.** This section
+used to say that exactly one gate had slipped past. Two more were found
+afterwards, by sweeps that had not been run when that sentence was written — so
+the number was a claim about gates nobody had looked for yet, which is the kind
+of claim this project keeps getting wrong. What is recorded instead is the rule,
+the shape, and the instances actually found.
+
+The shape is an assertion whose success does not depend on the thing it names.
+Found so far, all corrected in 0.3.1:
+
+- `assert "credit union" not in text or "not" in text` — the second limb is true
+  of every README ever written, so the assertion had no red state it could have
+  been run in. Deleted; the sibling gate below does the work.
+- a report gate asserting that `this tool's own` or `house` appears somewhere in
+  the rendered page, standing in for "the threshold lines carry their
+  attribution". Deleting the threshold attribution outright left the whole suite
+  byte-identical, because a sentence about *peer-group selection* satisfies the
+  same substring on every report. It now reads the `**Benchmark:**` lines and
+  requires the literal attribution on each, with the number of lines that must
+  carry it derived from the threshold table rather than typed in.
+- a threshold gate whose only assertion sat inside a filter that yields one
+  entry today and would yield none if that one citation were dropped — passing
+  while checking nothing. It now fails if the filter comes back empty.
+
+The sibling gate that does the credit-union work line by line survives, and was
+strengthened in the same release. It requires this README to state the scope
+limit in prose, and requires every prose mention to say plainly that those
+institutions are not covered; a bare negation elsewhere in the sentence is no
+longer enough, which is what previously let *"…with no setup required"* and
+*"nothing is excluded…"* past it. What it does not do is parse a sentence: one
+that states the exclusion and offers the tool in the same breath still passes,
+and a mention hard-wrapped across two lines is not seen at all. Both limits are
+written into the gate beside the mutations that measured them.
 
 ### Known issue in the 0.3.0 source tarball
 
