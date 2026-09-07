@@ -230,12 +230,36 @@ def test_the_manifest_reader_still_finds_the_prune_it_reads():
 
 #: Claims retired in earlier releases. None may reappear on ANY shipped surface.
 #:
-#: SCOPE, STATED HONESTLY: the gate below reads pyproject's [project] table and
-#: nothing else. This list is NOT swept across `_read_surface`, which is why the
-#: demo notebook can and does still say "CET1" (examples/cdfi_benchmarking_demo
-#: .ipynb:13, `grep -n CET1 examples/*.ipynb`). Widening it is a live claim
-#: correction and belongs with the other prose corrections, not with a change to
-#: how layouts are detected.
+#: SCOPE, STATED HONESTLY: the docstring above says no retired claim may appear
+#: on any shipped surface. The gate below does not enforce that. It reads
+#: pyproject's [project] table and nothing else; this list is never swept across
+#: `_read_surface`. The sentence that used to sit here recorded the consequence
+#: -- "the demo notebook can and does still say CET1" -- and that is no longer
+#: true, because 0.3.1 corrected it by hand:
+#:
+#:     grep -rn CET1 examples/   ->  no matches   (measured on this tree)
+#:
+#: The notebook said "Compute key performance metrics (NIM, efficiency ratio,
+#: ROAA, CET1, etc.)". The package computes no CET1 and never has: `tier1_ratio`
+#: is the Tier 1 LEVERAGE ratio, which is a different regulatory measure, and
+#: CET1 was struck from pyproject's `description` in 0.3.0 for exactly that
+#: reason. So the claim was retired everywhere except the one surface this gate
+#: cannot see, and a human had to find it.
+#:
+#: WHY THE GATE IS STILL NOT WIDENED, AND WHAT WIDENING WOULD COST
+#: Widening it is NOT a pure widening of this parametrization. The gate takes
+#: one `claim` parameter and calls `_project_meta()`; covering surfaces means a
+#: second `@parametrize("surface", ...)`, a `layout.require(surface)` call and a
+#: `_read_surface` loop -- new logic on a gate, in a release scoped to metadata
+#: and prose. It also has a live consequence: `examples/` is pruned from the
+#: sdist, so a surface-parametrized retired-claim gate acquires a skip at the
+#: tarball root and in the constructed sdist directory, which is precisely the
+#: layout behaviour PR #4 exists to settle. Doing both in one change makes
+#: neither reviewable.
+#:
+#: Deferred to 0.3.2 as its own change, red-proven per added surface. Until then
+#: this gate covers ONE surface and the docstring's "any shipped surface" is an
+#: aspiration, not a description -- which is why it is written down here.
 RETIRED_CLAIMS = ["CET1", "Tier 1 Capital Ratio", "INSTNAME"]
 
 #: (cert, name) bindings that are FALSE. Verified against FDIC /institutions.
@@ -354,10 +378,10 @@ def test_readme_points_at_the_live_api_host():
 @layout.needs("pyproject.toml")
 def test_version_is_bumped_for_a_release_that_changes_grades():
     meta = _project_meta()
-    assert meta["version"] == "0.3.0"
+    assert meta["version"] == "0.3.1"
 
 
 @layout.needs("CHANGELOG.md")
 def test_changelog_documents_the_current_version():
     text = layout.SURFACES["CHANGELOG.md"].read_text()
-    assert "## [0.3.0]" in text
+    assert "## [0.3.1]" in text

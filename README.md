@@ -272,6 +272,36 @@ its shape" (`FDICResponseError`):
 
 Every gate in this suite was run RED before the fix it covers was written.
 
+### Known issue in the 0.3.0 source tarball
+
+**Scope: the 0.3.0 sdist, and only when you run its suite from the tarball
+root. If you installed with `pip`, this does not affect you and there is
+nothing to do.**
+
+The suite that ships inside `cdfi_benchmark-0.3.0.tar.gz` fails when run from
+the unpacked tarball root — the invocation above — with two failures. Both are
+defects in the test gates themselves, not in the package: they required
+`examples/`, a directory `MANIFEST.in` deliberately prunes from the source
+distribution, so an unpacked sdist could never satisfy them. Nothing they check
+is actually wrong in 0.3.0.
+
+Measured against the published 0.3.0 artifacts, so the boundary is exact:
+
+- **The installed library is unaffected.** The 0.3.0 wheel ships no test files
+  at all, and its package code is byte-identical to 0.3.1's — same SHA-256 over
+  every module. Every metric, grade, threshold, peer group and report 0.3.0
+  produces is correct as documented.
+- Running the shipped suite against the **installed 0.3.0 wheel** passes, no
+  failures.
+- Running it from a directory holding `tests/`, `README.md` and
+  `pyproject.toml` passes, no failures.
+
+0.3.0 is **not** yanked. It fixes grading-direction, period-basis and
+peer-composition errors that 0.2.1 still carries, so pushing pinned users back
+to 0.2.1 would be the worse outcome. 0.3.1 fixes the tarball-root layout and
+the same command against it passes. `CHANGELOG.md` carries the reproduction and
+names the two failing gates.
+
 ---
 
 ## Who This Is For

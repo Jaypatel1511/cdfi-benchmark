@@ -7,6 +7,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > History prior to 0.2.0 predates this changelog and is not documented here.
 
+## [0.3.1] - 2026-09-07
+
+Packaging, release metadata and prose. **No library code changed.**
+`cdfibenchmark/` in this release is byte-identical to the package inside the
+published 0.3.0 wheel — verified by hashing every `.py` file under the package
+directory in both, which gives the same digest:
+
+    sha256 3f90077f200206a1d09929b868df2af43a6da325eb3e695da35f6f4ebbde9083
+
+No metric, grade, threshold, peer-selection rule or rendered value moves.
+Nothing computed under 0.3.0 needs re-running.
+
+**If you installed with `pip install`, this release changes nothing for you.**
+It matters only if you downloaded the 0.3.0 *source tarball* and ran the test
+suite that ships inside it.
+
+### Fixed
+
+- **The test suite shipped inside the sdist failed when run from the tarball
+  root, and no CI job in the release that shipped it could see the failure.**
+  Three claim-gate modules asked one global question — "is a source tree present
+  here?" — and then used that single answer for every surface they read. An
+  unpacked sdist contains `cdfibenchmark/`, so it answered "yes"; but
+  `examples/` is pruned from the sdist deliberately (`MANIFEST.in` says so in
+  words), so those gates then demanded a directory the tarball is designed never
+  to contain. Reproduced against the artifact on PyPI, python3.11:
+
+      curl -L <the 0.3.0 sdist from files.pythonhosted.org> | tar xz
+      cd cdfi_benchmark-0.3.0 && PYTHONPATH=. pytest tests/ -q
+      -> 2 failed, 319 passed, 3 skipped
+
+  The gates now ask the question per surface — *is this surface readable here,
+  and if not, has the artifact I am standing in DECLARED that it omits it?* Only
+  an unpacked sdist can declare an omission (it is identified by `PKG-INFO`, and
+  the declaration is read from the `MANIFEST.in` that ships inside it), and only
+  for the surfaces it names. Anything else missing is still red. That logic
+  lives in the new `tests/_layout.py`, so it exists once rather than in three
+  copies that could drift.
+
+- **Why no CI job saw it.** Every artifact-layout check lived in `release.yml`,
+  which triggers on a *tag push* — the irreversible step. So a layout defect
+  could only ever be discovered by a release that had already happened, and
+  0.3.0 is exactly that: it shipped with its own suite red at the tarball root
+  and all eight of `release.yml`'s artifact jobs green, because every one of
+  them ran the suite from a constructed directory that structurally cannot reach
+  that layout. The layout jobs now live in a reusable
+  `.github/workflows/artifact-layouts.yml` called by BOTH `ci.yml` (on pull
+  request and push to main) and `release.yml` (on a tag), so the check that runs
+  before the tag is literally the same code as the check that runs at it, and a
+  commit cannot reach a tag without the wheel, sdist, constructed-directory and
+  tarball-root layouts having been exercised on it. A step that runs the shipped
+  suite from the tarball root — the layout `README.md` documents under "Running
+  Tests" — was added, because that is the layout none of the previous jobs could
+  reach.
+
+- **`setup.py` declared `version="0.2.1"` and shipped that inside the sdist of
+  every release since.** Nothing read it — `pyproject.toml` carries a PEP 621
+  `[project]` table and PEP 621 metadata wins over anything `setup()` passes, so
+  the copy was inert and free to rot, and no gate covered it. It is not bumped;
+  the duplicated `name`, `version` and `install_requires` are removed and the
+  file is now a bare PEP 517 shim, so there is exactly one declared version in
+  the repository. Verified that the distribution is unaffected: with the shim in
+  place `python -m build` produces a wheel of the same 15 entries with
+  `top_level.txt = ['cdfibenchmark']` and no `tests/*`, and an sdist whose file
+  list is unchanged.
+
+- **Two stale measured claims in the demo notebook, both live on GitHub.**
+  `examples/cdfi_benchmarking_demo.ipynb` advertised "CET1" among the metrics it
+  computes. This package computes no CET1 and never has: `tier1_ratio` is the
+  Tier 1 *leverage* ratio, a different regulatory measure. The same claim was
+  struck from `pyproject.toml`'s `description` in 0.3.0 for that reason; the
+  notebook was missed because the gate that catches retired claims reads only
+  pyproject's `[project]` table. Separately, the notebook's opening markdown had
+  been left half-edited by the 0.3.0 correction — three sentences interleaved,
+  including a fragment describing a real Los Angeles MDI that had been carried
+  over from the wrong-cert binding 0.3.0 removed. The fragment is deleted rather
+  than repaired: it made a claim about a real institution that nothing in this
+  package establishes.
+
+- **The notebook attributed invented financials to a real, named institution.**
+  0.3.0's correction replaced the wrong cert/name binding in the notebook's
+  first two cells and in its own claim gate, and its commit message said "all
+  surfaces corrected". That was not true. The side-by-side comparison table
+  further down still carried a real MDI by name and CERT, with entirely
+  fabricated assets, NIM, efficiency ratio, ROAA, Tier 1 and NPL figures,
+  printed under the heading "MDI Peer Comparison Table" — and, worse, sitting
+  directly beneath a row explicitly labelled `(SYNTHETIC)`, which made the
+  unlabelled row read as real by contrast. Every institution in that table is
+  now synthetic, with a cert outside the FDIC's issued range and a name carrying
+  the `(SYNTHETIC)` marker, and the cell and its heading say so. The existing
+  wrong-cert gate could not catch this: it scans for one specific known-false
+  pairing, not for real institutions carrying made-up numbers.
+
+- **The notebook told users to pull live data for a cert that is not issued.**
+  Its closing example read `get_financials(cert=99001)` under "To pull live
+  financials for any institution" — 99001 being the synthetic cert the same
+  notebook states is outside the FDIC's issued range. It now points at the same
+  real cert the README's Quickstart uses.
+
+- **The notebook still cited the retired API host.** Its footer gave
+  `banks.data.fdic.gov/api`, which now answers HTTP 301. 0.3.0 moved the package
+  and the README to `api.fdic.gov/banks` and left the notebook behind.
+
+### Known issues in 0.3.0 — published, not yanked
+
+0.3.0 remains on PyPI and is **not** being yanked. Yanking would push pinned
+users back to 0.2.1, which still carries the substantive correctness defects
+0.3.0 fixed — the grading direction, the period basis and the peer-composition
+errors — and those are far more consequential than this one.
+
+**What is wrong with 0.3.0.** The test suite inside the 0.3.0 **source tarball**
+fails when run from the tarball root:
+
+    cd cdfi_benchmark-0.3.0 && PYTHONPATH=. pytest tests/ -q
+    -> 2 failed, 319 passed, 3 skipped
+
+The two failures are `test_package_claims.py::test_every_surface_these_gates_
+need_is_present_in_a_repo_tree` and `test_package_claims.py::test_no_surface_
+binds_a_cert_to_the_wrong_institution[57542-Broadway Federal]`. Both fail for
+the same reason and it is a defect in the *gates*, not in the package: they
+demanded `examples/`, a directory `MANIFEST.in` deliberately prunes from the
+sdist. Nothing they were testing is actually wrong in 0.3.0.
+
+**What is NOT affected — stated precisely, so this caveat is not read more
+broadly than it is.** All measured against the published 0.3.0 artifacts,
+python3.11:
+
+- **The installed library.** The 0.3.0 wheel contains no tests at all (15
+  entries, top-level `cdfibenchmark` and `cdfi_benchmark-0.3.0.dist-info`), and
+  its package code is byte-identical to this release's. Every metric, grade,
+  threshold, peer group and report 0.3.0 produces is correct as documented.
+- **`pip install cdfi-benchmark==0.3.0`.** Unaffected in every respect. There is
+  nothing to do.
+- **Running the suite against the installed 0.3.0 wheel** — `294 passed, 25
+  skipped`, no failures.
+- **Running the shipped suite from a directory holding `tests/`, `README.md` and
+  `pyproject.toml`** (the layout every 0.3.0 CI job used) — `295 passed, 24
+  skipped`, no failures.
+
+So the defect is reachable by exactly one action: unpacking the 0.3.0 source
+tarball and running its suite from the tarball root. 0.3.1 fixes it; the same
+invocation against 0.3.1 passes.
+
+### Changed
+
+- The floor guarding against a silently-deselected sdist suite was re-derived.
+  Its justification still read "96 tests executed under this job's exact
+  invocation, half is 48, so the floor is 45" — a measurement the suite had
+  outgrown by more than a factor of three. Re-measured from the junit XML the
+  job itself emits: 309 executed, so the floor is now 150 by the same
+  already-written rule. This raises the threshold rather than lowering it; the
+  old floor let 264 of 309 tests be deselected without complaint. Two further
+  stale measurements in the same workflow, and one demonstration in it that had
+  become false outright, were re-run and rewritten with the command that
+  produced each number beside it.
+
 ## [0.3.0] - 2026-09-05
 
 Grading-direction, period-basis and peer-composition corrections. Every fix

@@ -190,11 +190,26 @@ jobs:
           # directory has NO ini file, so [tool.pytest.ini_options] never
           # applies and empty_parameter_set_mark = fail_at_collect is inert --
           # an empty parametrize goes back to being a silent skip in this job
-          # specifically. Measured in this exact layout: a planted empty
-          # parametrize gave `96 passed, 1 skipped`, exit 0. tests/ already
-          # comes from the checkout here, so taking pyproject.toml from it too
-          # changes nothing about what is under test: the WHEEL still supplies
-          # the package.
+          # specifically.
+          #
+          # RE-MEASURED for 0.3.1, python3.10, in this exact layout (tests/ from
+          # the checkout, installed wheel, NO pyproject.toml in the directory):
+          #
+          #   cd wheel-tests && pytest tests -q --import-mode=importlib
+          #       control, no plant   -> 296 passed, 31 skipped   exit 0
+          #       + a planted @pytest.mark.parametrize("x", []) whose body
+          #         raises AssertionError
+          #                           -> 296 passed, 32 skipped   exit 0
+          #
+          # The plant became the 32nd skip and the job stayed green: the empty
+          # parametrize was collected, silently skipped, and never ran. That is
+          # the behaviour this `cp` prevents. The previous figure here was
+          # `96 passed, 1 skipped` -- the same experiment on a suite a third the
+          # size, left behind when the suite grew.
+          #
+          # tests/ already comes from the checkout here, so taking pyproject.toml
+          # from it too changes nothing about what is under test: the WHEEL still
+          # supplies the package.
           cp pyproject.toml "${TESTDIR}/pyproject.toml"
           cd "${TESTDIR}"
           "${VPY}" -m pytest tests --import-mode=importlib
@@ -310,11 +325,37 @@ jobs:
           # changing what gets collected." That is true in the sibling repos,
           # which register markers and pass -m. It is not true here: this repo
           # registers NO markers and passes NO -m, so --strict-markers has
-          # nothing to be strict about. Demonstrated -- replacing this
-          # directory's pyproject.toml with an EMPTY file still gives
-          # `96 passed`, exit 0. The comment asserted a protection the flag
-          # was not providing, which is the same false-assurance class the
-          # whole pipeline exists to close.
+          # nothing to be strict about.
+          #
+          # DEMONSTRATION, RE-RUN FOR 0.3.1 -- AND THE OLD ONE NO LONGER HOLDS.
+          # This comment used to say "replacing this directory's pyproject.toml
+          # with an EMPTY file still gives `96 passed`, exit 0". Measured today
+          # on the 0.3.1 tarball, python3.10, in the constructed directory:
+          #
+          #   pyproject.toml EMPTY (0 bytes)
+          #     pytest tests -q --import-mode=importlib
+          #       -> 4 failed, 305 passed, 18 skipped   exit 1
+          #       (test_package_claims::test_version_is_bumped_for_a_release...
+          #        and the three test_retired_claims_do_not_reappear... ids;
+          #        `_project_meta`'s fallback reader RAISES on a pyproject it
+          #        cannot read, which is a round-2 change)
+          #
+          #   pyproject.toml ABSENT ENTIRELY
+          #     pytest tests -q --import-mode=importlib
+          #       -> 304 passed, 23 skipped             exit 0
+          #
+          # So the silent-green case is the ini going MISSING, not the ini going
+          # empty -- `layout.needs("pyproject.toml")` turns those same gates into
+          # named skips and the job exits 0 with the ini settings inert. That is
+          # the case this step's greps exist to catch, and it is the case the old
+          # sentence should have used. Both are caught: on an absent file grep
+          # exits 2, on an empty one it exits 1, and `if ! grep -q` fires either
+          # way (verified for absent / empty / good).
+          #
+          # The point the old sentence was making survives intact: --strict-markers
+          # asserted a protection it was not providing, which is the same
+          # false-assurance class the whole pipeline exists to close. Only the
+          # experiment that demonstrated it had gone stale.
           #
           # So assert it directly instead of inferring it from a flag. The ini
           # is load-bearing here: it carries empty_parameter_set_mark =
@@ -381,17 +422,44 @@ jobs:
           #
           # FLOOR DERIVATION -- not a number picked to be safe. The rule is
           # HALF of what the suite genuinely runs today, rounded down to a
-          # round number. Measured on this tarball: 96 tests executed under
-          # this job's exact invocation. Half is 48, so the floor is 45.
+          # round number.
+          #
+          # RE-DERIVED FOR 0.3.1. The measurement behind the old FLOOR=45 was
+          # "96 tests executed under this job's exact invocation, half is 48".
+          # The suite has since more than tripled and that sentence was left
+          # behind. Measured on the 0.3.1 tarball, python3.10, by running this
+          # job's own two steps and counting the junit XML this step already
+          # produces -- i.e. the same number the check below compares against:
+          #
+          #   cd sdist-tests && pytest tests -q --import-mode=importlib \
+          #        --junitxml=sdist-junit.xml
+          #     -> 309 passed, 18 skipped
+          #   python -c 'sum(tests) - sum(skipped) over <testsuite> in the XML'
+          #     -> 309
+          #
+          # Half of 309 is 154.5; rounded down to a round number, 150.
+          #
+          # RULING ON MOVING THE THRESHOLD. Moving a floor to accommodate a
+          # measurement is normally the defect, not the fix. It is not what this
+          # is. The floor was never breached -- the measurement went UP, 96 to
+          # 309, and 45 was still passing comfortably. Raising it to 150 applies
+          # the rule that was already written down to the number the job now
+          # actually produces, and it strictly INCREASES what the gate can
+          # catch: at 45, deselecting 264 of 309 tests was green. Nothing is
+          # being loosened. Had the measurement come in BELOW 45, the correct
+          # response would have been to find out why, not to lower the floor.
           #
           # Half, deliberately: the rejected `-lt 14` threshold sat at the
           # exact count shipping that day, so deleting one test module failed
           # the job with a packaging error for a deliberate source change.
-          # This one has ~51 tests of headroom -- you would have to delete more
+          # This one has 159 tests of headroom -- you would have to delete more
           # than half the suite before it complains, and no plausible refactor
           # does that silently, while total deselection lands at 0 and trips it
-          # immediately.
-          FLOOR=45
+          # immediately. The count does not vary across the 3.9-3.12 matrix:
+          # nothing in tests/ branches on sys.version_info, and the one
+          # version-dependent path (tomllib on 3.11+, a narrow fallback reader
+          # below it) changes how pyproject is parsed, not how many tests run.
+          FLOOR=150
           EXECUTED="$(python - "${RUNNER_TEMP}/sdist-junit.xml" <<'PY'
           import sys, xml.etree.ElementTree as ET
           root = ET.parse(sys.argv[1]).getroot()
@@ -424,15 +492,28 @@ jobs:
       # way and those gates RUN. They are therefore invisible to every job that
       # existed before this step.
       #
-      # Measured on the 0.3.0 tarball, python3.10, same sdist in both layouts:
+      # WHY THE STEP EXISTS -- measured on the 0.3.0 tarball, python3.10, same
+      # sdist in both layouts. This is HISTORY: it is a statement about the
+      # tarball published to PyPI on 2026-09-06, and it is only reproducible
+      # against that tarball, not against this tree.
       #   cd "${TESTDIR}" && pytest tests -q --import-mode=importlib
-      #       -> 295 passed, 24 skipped        (what the job above sees)
+      #       -> 295 passed, 24 skipped
       #   cd "${SRC}" && PYTHONPATH=. pytest tests/ -q
       #       -> 2 failed, 319 passed, 3 skipped
-      # 21 assertions run here that do not run there, and two of them fail.
-      # That is not a hypothetical gap: cdfi-benchmark 0.3.0 is on PyPI
-      # permanently with its own suite red in this layout, and all eight
-      # artifact jobs of the release that shipped it were green.
+      # Two assertions ran at the tarball root that could not run in the
+      # constructed directory, and both failed. That is not a hypothetical gap:
+      # cdfi-benchmark 0.3.0 is on PyPI permanently with its own suite red in
+      # this layout, and all eight artifact jobs of the release that shipped it
+      # were green.
+      #
+      # WHAT THE TWO LAYOUTS DO TODAY -- re-derived on the 0.3.1 tarball,
+      # python3.10, same sdist in both, same two invocations as above:
+      #   constructed directory  -> 309 passed, 18 skipped   (309 executed)
+      #   tarball root           -> 328 passed,  4 skipped   (328 executed)
+      # 19 assertions run at the tarball root that do not run in the constructed
+      # directory, and none of them fails. The two figures are the two the
+      # comparison at the end of this step re-derives from junit XML on every
+      # run, so they cannot silently drift apart from what the job measures.
       #
       # `PYTHONPATH=. pytest tests/` is not an invented invocation. It is what
       # README.md:271 tells users to run, verbatim, under "## Running Tests".
@@ -474,10 +555,11 @@ jobs:
           # VACUITY GUARD, DERIVED -- NOT A TYPED FLOOR.
           #
           # The step above goes red on a failing assertion, but not on a suite
-          # that quietly stopped collecting things. The FLOOR=45 in the
-          # preceding step is a typed number whose surrounding derivation is
-          # already stale, and adding a second typed number here would age the
-          # same way. So compare the two runs instead: the tarball root can
+          # that quietly stopped collecting things. The FLOOR in the preceding
+          # step is a typed number, and a typed number ages: its derivation had
+          # gone stale by a factor of three before 0.3.1 re-derived it (96 -> 309
+          # executed, floor 45 -> 150). Adding a second typed number here would
+          # age the same way. So compare the two runs instead: the tarball root can
           # only ever ENABLE gates the constructed directory skipped (it has
           # strictly more surfaces -- cdfibenchmark/, CHANGELOG.md), so it must
           # execute at least as many tests. Both numbers come from junit XML
