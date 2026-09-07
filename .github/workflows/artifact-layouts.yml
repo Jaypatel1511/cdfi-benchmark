@@ -196,12 +196,17 @@ jobs:
           # the checkout, installed wheel, NO pyproject.toml in the directory):
           #
           #   cd wheel-tests && pytest tests -q --import-mode=importlib
-          #       control, no plant   -> 296 passed, 31 skipped   exit 0
+          #       control, no plant   -> 296 passed, 32 skipped   exit 0
           #       + a planted @pytest.mark.parametrize("x", []) whose body
           #         raises AssertionError
-          #                           -> 296 passed, 32 skipped   exit 0
+          #                           -> 296 passed, 33 skipped   exit 0
           #
-          # The plant became the 32nd skip and the job stayed green: the empty
+          # (Re-run again in round 4, which moved the skip count by one: the
+          # build-requirement and MANIFEST gates skip in a directory with no
+          # pyproject.toml and no MANIFEST.in, and the unfailable credit-union
+          # gate that skipped here was deleted. Executions are unchanged at 296.)
+          #
+          # The plant became the 33rd skip and the job stayed green: the empty
           # parametrize was collected, silently skipped, and never ran. That is
           # the behaviour this `cp` prevents. The previous figure here was
           # `96 passed, 1 skipped` -- the same experiment on a suite a third the
@@ -334,15 +339,22 @@ jobs:
           #
           #   pyproject.toml EMPTY (0 bytes)
           #     pytest tests -q --import-mode=importlib
-          #       -> 4 failed, 305 passed, 18 skipped   exit 1
-          #       (test_package_claims::test_version_is_bumped_for_a_release...
-          #        and the three test_retired_claims_do_not_reappear... ids;
-          #        `_project_meta`'s fallback reader RAISES on a pyproject it
-          #        cannot read, which is a round-2 change)
+          #       -> 5 failed, 304 passed, 19 skipped   exit 1
+          #       (test_package_claims::test_version_is_bumped_for_a_release...,
+          #        the three test_retired_claims_do_not_reappear... ids, and
+          #        test_the_declared_build_requirement_can_read_this_metadata;
+          #        `_project_meta`'s fallback reader and `_build_requires` both
+          #        RAISE on a pyproject they cannot read rather than returning
+          #        empty, which is what makes these five red instead of green)
           #
           #   pyproject.toml ABSENT ENTIRELY
           #     pytest tests -q --import-mode=importlib
-          #       -> 304 passed, 23 skipped             exit 0
+          #       -> 303 passed, 25 skipped             exit 0
+          #
+          #   (Both re-run in round 4. EMPTY moved 4 failed -> 5 by the new
+          #   build-requirement gate; ABSENT moved because that gate and the
+          #   MANIFEST gate skip without their surfaces while the deleted
+          #   credit-union gate stopped passing here.)
           #
           # So the silent-green case is the ini going MISSING, not the ini going
           # empty -- `layout.needs("pyproject.toml")` turns those same gates into
@@ -433,9 +445,13 @@ jobs:
           #
           #   cd sdist-tests && pytest tests -q --import-mode=importlib \
           #        --junitxml=sdist-junit.xml
-          #     -> 309 passed, 18 skipped
+          #     -> 309 passed, 19 skipped
           #   python -c 'sum(tests) - sum(skipped) over <testsuite> in the XML'
           #     -> 309
+          #
+          # Re-run in round 4: the skip count moved by one (the MANIFEST gate
+          # has no MANIFEST.in in this directory) but EXECUTIONS did not, so the
+          # derivation and the floor below are unchanged.
           #
           # Half of 309 is 154.5; rounded down to a round number, 150.
           #
@@ -508,10 +524,11 @@ jobs:
       #
       # WHAT THE TWO LAYOUTS DO TODAY -- re-derived on the 0.3.1 tarball,
       # python3.10, same sdist in both, same two invocations as above:
-      #   constructed directory  -> 309 passed, 18 skipped   (309 executed)
-      #   tarball root           -> 328 passed,  4 skipped   (328 executed)
-      # 19 assertions run at the tarball root that do not run in the constructed
-      # directory, and none of them fails. The two figures are the two the
+      #   constructed directory  -> 309 passed, 19 skipped   (309 executed)
+      #   tarball root           -> 329 passed,  4 skipped   (329 executed)
+      # 20 assertions run at the tarball root that do not run in the constructed
+      # directory, and none of them fails. (Re-derived in round 4 from the junit
+      # XML of both runs; the executed counts come from the same COUNT() below.) The two figures are the two the
       # comparison at the end of this step re-derives from junit XML on every
       # run, so they cannot silently drift apart from what the job measures.
       #
