@@ -46,68 +46,41 @@ reach and passes on the rest reports success over a fraction of its coverage —
 the silent narrowing this suite has a standing rule against. All-or-nothing over
 each gate's own coverage set, or the pass means nothing.
 """
-import pathlib
-
 import pytest
 
 from cdfibenchmark.data.schema import BENCHMARKS, BenchmarkResult
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+from . import _layout as layout
+
+ROOT = layout.ROOT
 
 #: Every repo-prose document any gate in this module opens, resolved once.
 #: Scoped to these two files, not to the repo root as a whole: a gate should
 #: require what it reads and no more, or the reason it prints when it skips is
 #: not the truth about why it skipped.
 _DOC_SURFACES = {
-    "README.md": ROOT / "README.md",
-    "CHANGELOG.md": ROOT / "CHANGELOG.md",
+    "README.md": layout.SURFACES["README.md"],
+    "CHANGELOG.md": layout.SURFACES["CHANGELOG.md"],
 }
 
 
-#: See the long note in `test_bound_claims.py`: "the file is absent" is true both
-#: in an artifact run and when someone deleted it, and only the second should be
-#: red. Either anchor means "there is a repository here", and neither exists in
-#: release.yml's wheel-tests or sdist-tests directory.
-_IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
-
-
-def _needs(*surfaces):
-    """All-or-nothing over THIS gate's OWN coverage set.
-
-    The unit that must not half-run is a gate's coverage set, not the module.
-    So each gate declares the surfaces IT reads and skips only if one of those
-    is unavailable — never for a document it does not open.
-
-    That distinction is load-bearing here, and getting it wrong costs real
-    coverage in a real job. `test-sdist` copies README.md into its run directory
-    and not CHANGELOG.md. A single module-wide predicate over {README, CHANGELOG}
-    would therefore switch off the README gate in test-sdist — and the README is
-    the LIVE claim surface, the text PyPI renders, the one document whose
-    retracted figure most needs a gate standing over the artifact. Requiring
-    CHANGELOG.md in order to check README.md buys nothing and gives that up.
-
-    Gated on `_IS_REPO_TREE` as well as absence, so a DELETED README.md inside a
-    checkout is red rather than skipped: the file being missing is not by itself
-    evidence that missing is expected.
-
-    What this is NOT: a per-surface `exists()` inside a gate that spans several
-    surfaces. `test_the_shipped_docs_state_the_pinned_measurement` spans both
-    documents, so it declares both and skips both legs together. Letting its
-    CHANGELOG leg skip while its README leg passed is the silent narrowing —
-    a gate reporting success over half its surface — and it is what this module
-    did until now.
-    """
-    missing = sorted(n for n in surfaces if not _DOC_SURFACES[n].exists())
-    return pytest.mark.skipif(
-        bool(missing) and not _IS_REPO_TREE,
-        reason=(
-            "no repository tree here (no cdfibenchmark/, no .git) and this gate's "
-            "documents are absent from the run directory: " + ", ".join(missing)
-            + f" (gate reads: {', '.join(sorted(surfaces))}; expected in an "
-            "installed-artifact run, where it runs in the `test` job. The "
-            "grading assertions in this module run here regardless.)"
-        ),
-    )
+#: This module already had the ruling the other two lacked: the unit that must
+#: not half-run is a GATE'S OWN COVERAGE SET, not the module. What it did NOT
+#: have was a way to tell a deletion from an omission the distribution declares
+#: -- it carried its own third copy of
+#:
+#:     _IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
+#:
+#: which answers "is a source tree present" and was then used to answer "should
+#: this particular surface be here". Both questions now live in
+#: `tests/_layout.py`, once, and `_needs` is `layout.needs` -- so a fix to that
+#: distinction reaches all three modules instead of one.
+#:
+#: Neither README.md nor CHANGELOG.md is ever legitimately absent from a
+#: distribution (MANIFEST.in `include`s both), so nothing here is ever excused
+#: by a declaration; the change is that the RULE is now shared rather than that
+#: this module's behaviour moves.
+_needs = layout.needs
 
 
 #: Named once so the decorators below read as declarations of what each gate
@@ -130,12 +103,13 @@ def test_every_document_this_module_reads_is_present_in_a_repo_tree():
     Skipped in an artifact run, where there is no repository and nothing was
     deleted.
     """
-    if not _IS_REPO_TREE:
-        pytest.skip("no repository tree here; nothing was deleted, see _needs")
-    missing = sorted(n for n, path in _DOC_SURFACES.items() if not path.exists())
+    if not layout.IS_REPO_TREE:
+        pytest.skip("no source tree here; nothing was deleted, see _needs")
+    _, _declared, missing = layout.classify(*sorted(_DOC_SURFACES))
     assert not missing, (
-        f"this is a repository tree (cdfibenchmark/ or .git/ is present) but "
-        f"{', '.join(missing)} is unreadable. That is a deleted or moved "
+        f"a source tree is present here (cdfibenchmark/ or .git/) but "
+        f"{', '.join(missing)} is unreadable, and nothing declares it absent. "
+        f"That is a deleted or moved "
         f"document, not an installed-artifact run, so it fails instead of "
         f"skipping."
     )
