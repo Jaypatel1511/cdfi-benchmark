@@ -61,7 +61,9 @@ import pytest
 
 from cdfibenchmark.data import fdic
 
-ROOT = Path(__file__).resolve().parent.parent
+from . import _layout as layout
+
+ROOT = layout.ROOT
 SKIP_DIRS = {".git", "build", "dist", ".pytest_cache", "__pycache__",
              "cdfi_benchmark.egg-info", ".venv", "venv"}
 
@@ -76,63 +78,50 @@ _HISTORY_MARKERS = (
     "it replaces", "moved from",
 )
 
-#: Every surface the scan must be able to walk. ALL-OR-NOTHING, copied from the
-#: discipline in `test_package_claims.py:83-99`.
+#: Every surface the scan must be able to walk.
 #:
-#: Not `if path.exists()` per surface, and not a per-test skip. A scan that
-#: quietly drops the surfaces it cannot reach goes GREEN while checking a
-#: fraction of what it checks locally — which is what happened in the release
-#: jobs before this gate existed: `test_the_scan_finds_the_sites_it_is_supposed
-#: _to_guard` was the ONLY thing standing between a narrowed scan and a green
-#: run, and it is a vacuity self-check, not the gate. Without it the
-#: parametrized gate below would have gone green over `.py` files alone.
+#: ALL-OR-NOTHING FOR THIS MODULE, DELIBERATELY -- AND UNLIKE
+#: `test_package_claims.py`, which was split into per-gate coverage sets in the
+#: same change that wrote this comment. The two modules differ in shape, so the
+#: same rule does not fit both: that one has eleven gates reading different
+#: documents, several of which are readable in a directory where others are not.
+#: This one has ONE gate, a scan over the whole tree, and a scan that quietly
+#: drops the surfaces it cannot reach goes GREEN while checking a fraction of
+#: what it checks locally. `test_the_scan_finds_the_sites_it_is_supposed_to
+#: _guard` is a vacuity self-check, not the gate; without the all-or-nothing
+#: rule the parametrized gate below would have gone green over `.py` files alone.
 #:
-#: So the module runs in full against a checkout or not at all, and when it does
-#: not run it NAMES what was missing.
-_REQUIRED_SURFACES = {
-    "pyproject.toml": ROOT / "pyproject.toml",
-    "README.md": ROOT / "README.md",
-    "CHANGELOG.md": ROOT / "CHANGELOG.md",
-    "cdfibenchmark/": ROOT / "cdfibenchmark",
-    "tests/": ROOT / "tests",
-}
-_MISSING = sorted(n for n, path in _REQUIRED_SURFACES.items() if not path.exists())
-
-#: Is ROOT a repository tree at all, or an artifact test directory?
-#:
-#: This distinction is the difference between a legitimate skip and a gate that
-#: went quiet when it should have gone red, and a bare `exists()` cannot draw it:
-#: "CHANGELOG.md is absent" is true both when we are testing a wheel and when
-#: somebody deleted CHANGELOG.md. Skipping on the second is the same
-#: false-assurance defect as failing on the first, just inverted — the gate
-#: reports "not applicable" about a tree it should have failed over.
-#:
-#: Two anchors, either sufficient, neither present in an artifact test directory:
-#:   cdfibenchmark/  the package source tree — a checkout has it, so does an
-#:                   unpacked sdist root; release.yml's wheel-tests and
-#:                   sdist-tests directories deliberately do NOT (that is the
-#:                   whole point of running from a clean dir).
-#:   .git/           a checkout even if the source tree itself were deleted.
-#:
-#: So the module skips ONLY where there is no repository to scan. Inside one,
-#: every required surface must be present or the module goes RED —
-#: `test_every_surface_the_scan_needs_is_present_in_a_repo_tree` says so by name.
-_IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
-
-#: True only in an installed-artifact run: surfaces missing AND no repo here.
-_SKIP = bool(_MISSING) and not _IS_REPO_TREE
-
-pytestmark = pytest.mark.skipif(
-    _SKIP,
-    reason=(
-        "no repository tree here (no cdfibenchmark/, no .git) and these surfaces "
-        "are absent, so the bound-claim scan cannot run in full: "
-        + ", ".join(_MISSING)
-        + " (expected in an installed-artifact run; the scan runs in the `test` "
-        "job, and the two assertions about shipped source moved to "
-        "tests/test_shipped_source_claims.py, which runs everywhere)"
-    ),
+#: Every surface named here SHIPS in the sdist -- MANIFEST.in `include`s the
+#: three files and `recursive-include tests *.py` takes the suite -- so unlike
+#: `examples/` none of them can ever be legitimately absent from a distribution.
+#: That is not assumed: `layout.classify` reads MANIFEST.in inside an sdist root
+#: and would start excusing one the day it stopped shipping.
+_REQUIRED_SURFACES = (
+    "pyproject.toml", "README.md", "CHANGELOG.md", "cdfibenchmark/", "tests/",
 )
+_PRESENT, _DECLARED_ABSENT, _UNDECLARED_ABSENT = layout.classify(*_REQUIRED_SURFACES)
+
+#: Can the scan run at all? Only when every surface it walks is readable. The
+#: three questions this used to conflate -- "is a surface missing", "is there a
+#: repository here", "should we skip" -- now live in `tests/_layout.py`, which
+#: asks them PER SURFACE and can tell a deletion from a declared omission.
+#:
+#: THIS IS ALSO WHAT STOPS A DELETION FROM ABORTING COLLECTION. `_hits()` calls
+#: `_current_version()`, which reads pyproject.toml unconditionally, and
+#: `_SCAN_HITS` calls `_hits()` at IMPORT time. Deleting pyproject.toml from a
+#: checkout therefore raised FileNotFoundError during COLLECTION:
+#:
+#:     ERROR tests/test_bound_claims.py - FileNotFoundError: ... pyproject.toml
+#:     !!!! Interrupted: 1 error during collection !!!!
+#:     1 error in 0.27s
+#:
+#: and the entire suite stopped -- 324 tests, not one of them run. The commit
+#: that introduced that deletion claimed it was "RED by name in all three
+#: modules"; for this surface that was false, and a suite that does not run is
+#: not a suite that failed by name. Gating on ABSENCE rather than on the skip
+#: predicate means `_hits()` is never called when a surface it needs is gone,
+#: and the gates below then fail by name through `layout.require`.
+_CAN_SCAN = not _DECLARED_ABSENT and not _UNDECLARED_ABSENT
 
 
 def _current_version() -> str:
@@ -259,47 +248,54 @@ def _is_history(hit) -> bool:
 
 #: The scan's result, computed ONCE at collection time.
 #:
-#: `pytestmark` is evaluated at SETUP, which is too late for a parametrize list:
-#: `empty_parameter_set_mark = fail_at_collect` fires during COLLECTION, so a
-#: zero-length list would abort the module with a collection error that the
-#: module-level skip cannot prevent. Hence the two-case shape below, and the
-#: reason it is written this way rather than `_hits()` inline:
+#: A module-level skip is evaluated at SETUP, which is too late for a
+#: parametrize list: `empty_parameter_set_mark = fail_at_collect` fires during
+#: COLLECTION, so a zero-length list would abort the module with a collection
+#: error that no skip could prevent. Hence the two-case shape below:
 #:
-#: * scanning (a checkout) -> the real hits, and if the scan finds NONE
-#:   the list is empty and `fail_at_collect` ERRORS. That protection is the
+#: * scanning (every surface readable) -> the real hits, and if the scan finds
+#:   NONE the list is empty and `fail_at_collect` ERRORS. That protection is the
 #:   whole point and it stays armed exactly where it can mean something.
-#: * not scanning (an artifact run) -> one placeholder param, which the
-#:   module-level skipif then skips. Not a green pass: the module reports
-#:   skipped, with the reason naming what was missing.
-#:
-#: `_hits()` is not even called in an artifact run, because it reads
-#: pyproject.toml unconditionally and would raise at import.
-_SCAN_HITS = [] if _SKIP else [h for h in _hits() if _is_bound_shaped(h)]
+#: * not scanning -> one placeholder param, which `layout.require` in the body
+#:   resolves into a NAMED skip (an artifact directory, or a surface the
+#:   distribution declares it omits) or a NAMED failure (a deletion from a
+#:   source tree). Never a green pass.
+_SCAN_HITS = [h for h in _hits() if _is_bound_shaped(h)] if _CAN_SCAN else []
 _SCAN_PARAMS = (
-    [pytest.param(None, id="scan-did-not-run")] if _SKIP
-    else [pytest.param(h, id=f"{h['path']}:{h['line']}") for h in _SCAN_HITS]
+    [pytest.param(h, id=f"{h['path']}:{h['line']}") for h in _SCAN_HITS]
+    if _CAN_SCAN else [pytest.param(None, id="scan-did-not-run")]
 )
 
 
-# ── the gate ─────────────────────────────────────────────────────────────────
-def test_every_surface_the_scan_needs_is_present_in_a_repo_tree():
+# ── the gate ───────────────────────────────────────────────────
+def test_every_surface_the_scan_needs_is_present_or_declared_absent():
     """The mutation gate: a deleted surface must be RED here, never a skip.
 
-    Reached only when `_SKIP` is False — i.e. we are in a repository tree — so
-    inside a checkout this is an unconditional assertion that every surface the
-    scan walks is really there. Delete CHANGELOG.md from a checkout and this
-    fails by name; that is what stops the module from answering "not applicable"
-    about a tree it should have failed over.
+    Delete CHANGELOG.md from a checkout and this fails by name; that is what
+    stops the module from answering "not applicable" about a tree it should have
+    failed over. In `test-wheel` and `test-sdist`'s constructed directory there
+    is no source tree, so this skips -- correctly: those directories are not
+    repositories and never were.
 
-    In `test-wheel` and `test-sdist` the module skips before reaching this, which
-    is correct: those directories are not repositories and never were.
+    Unlike the old version of this gate, "the surface is missing" is no longer
+    the same question as "should we skip". `tests/_layout.py` separates them:
+    only an artifact that states its own contents can excuse an absence, and
+    only for the surfaces it names.
     """
-    assert not _MISSING, (
-        f"this is a repository tree (cdfibenchmark/ or .git/ is present) but the "
-        f"bound-claim scan cannot reach {', '.join(_MISSING)}. That is a deleted "
-        f"or moved surface, not an installed-artifact run, so it fails instead of "
-        f"skipping. Restore the surface, or remove it from _REQUIRED_SURFACES and "
-        f"say in the docstring what the scan no longer covers."
+    if not layout.IS_REPO_TREE:
+        pytest.skip(
+            "no source tree here (no cdfibenchmark/, no .git); nothing was "
+            "deleted. The scan runs in ci.yml's `test` job and at the tarball "
+            "root, and the two assertions about shipped source moved to "
+            "tests/test_shipped_source_claims.py, which runs everywhere."
+        )
+    assert not _UNDECLARED_ABSENT, (
+        f"a source tree is present here (cdfibenchmark/ or .git/) but the "
+        f"bound-claim scan cannot reach {', '.join(_UNDECLARED_ABSENT)}, and "
+        f"nothing here declares those absent. That is a deleted or moved "
+        f"surface, not an installed-artifact run, so it fails instead of "
+        f"skipping. Restore the surface, or remove it from _REQUIRED_SURFACES "
+        f"and say in the docstring what the scan no longer covers."
     )
 
 
@@ -315,6 +311,7 @@ def test_the_scan_finds_the_sites_it_is_supposed_to_guard():
     whole gate is trying to reach — a sentence that cannot go stale because it
     names the constant instead of copying it.
     """
+    layout.require(*_REQUIRED_SURFACES)
     hits = _SCAN_HITS
     assert hits, (
         "the bound-claim scan found NO bound-shaped pair anywhere in the tree. "
@@ -336,6 +333,7 @@ def test_the_scan_reads_python_prose_and_not_python_code():
     or carry an exclusion list, and an exclusion list is the hand-typed list this
     gate exists to replace.
     """
+    layout.require(*_REQUIRED_SURFACES)
     sample = ROOT / "tests" / "test_ranking.py"
     assert sample.exists()
     segments = list(_prose_segments(sample))
@@ -356,6 +354,16 @@ def test_no_live_prose_states_a_bound_the_constant_contradicts(hit):
     corrected site — `fdic.py`'s `_coerce_float` docstring, or the `test_fdic.py`
     header comment — and this fails naming that file and line.
     """
+    if hit is None:
+        # The scan did not run. `require` says why, by name: a named skip in a
+        # directory that is not a source tree, a named FAILURE for a surface
+        # deleted from one.
+        layout.require(*_REQUIRED_SURFACES)
+        pytest.fail(
+            "the scan did not run, yet every surface it needs is readable. "
+            "_CAN_SCAN and layout.classify disagree, so this gate is reporting "
+            "on a scan that never happened."
+        )
     if _is_history(hit):
         return
     low, high = (_numeric(t) for t in hit["pair"])

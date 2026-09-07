@@ -15,11 +15,43 @@ against the live FDIC /institutions endpoint on 2026-08-30. Broadway Federal is
 CERT 30306 and is ACTIVE:0. That block is not sample data; it is a LIVE API call
 that returns a real, correct, graded report about an entirely different bank
 from the one named beside it.
+
+WHY THIS MODULE NO LONGER SKIPS AS A UNIT
+-----------------------------------------
+It used to. `_REQUIRED_SURFACES` was all-or-nothing over the whole module, on
+the reasoning that a gate which quietly drops the surfaces it cannot reach goes
+green while scanning a fraction of what it scans locally. That reasoning is
+right about the CERT SCAN and wrong about everything else here, and both halves
+were measured on 0.3.0:
+
+* At the TARBALL ROOT the module ran and went RED, because `examples/` is pruned
+  from the sdist deliberately (MANIFEST.in says so in words) while
+  `cdfibenchmark/` ships — so the tarball answered "repository tree" and the
+  module then demanded a directory the tarball is designed never to contain.
+  Measured: `2 failed, 319 passed, 3 skipped`. That is how 0.3.0 shipped with
+  its own suite red in the layout README.md:271 documents.
+
+* In the CONSTRUCTED sdist test directory the module skipped ALL THIRTEEN of its
+  gates — including eight that read nothing but README.md and pyproject.toml,
+  BOTH OF WHICH release.yml copies into that directory. Measured on the 0.3.0
+  tarball: `test_package_claims: {'skip': 13}`. The module was protecting
+  against silent narrowing by narrowing to zero.
+
+So the unit that must not half-run is a GATE'S OWN COVERAGE SET, not the module
+— the ruling `test_calibration_claims.py` already reached and this module never
+adopted. Each gate below declares the surfaces it opens and skips only for
+those. The cert scan, which really is a sweep over many surfaces, is
+parametrized BY surface, so a surface it cannot reach is a visible skip with a
+named reason rather than a shrunken scan inside a passing test.
+
+Whether an absence is a deletion or a declared omission is `tests/_layout.py`.
 """
 import re
 from pathlib import Path
 
 import pytest
+
+from . import _layout as layout
 
 try:                      # 3.11+
     import tomllib
@@ -29,9 +61,9 @@ except ModuleNotFoundError:
     except ModuleNotFoundError:
         tomllib = None
 
-ROOT = Path(__file__).resolve().parent.parent
-README = ROOT / "README.md"
-PYPROJECT = ROOT / "pyproject.toml"
+ROOT = layout.ROOT
+README = layout.SURFACES["README.md"]
+PYPROJECT = layout.SURFACES["pyproject.toml"]
 
 
 def _project_meta() -> dict:
@@ -68,92 +100,146 @@ def _project_meta() -> dict:
             )
     return out
 
-#: Every surface these gates must be able to read. This module is a REPO gate,
-#: not an artifact gate: it runs in full against a checkout, or not at all.
-#:
-#: All-or-nothing on purpose. release.yml's test-sdist job runs the suite from a
-#: directory holding ONLY tests/ + README.md + pyproject.toml (deliberately no
-#: checkout, so the checkout cannot leak into the thing under test). A gate that
-#: merely skipped its unreadable surfaces would go GREEN there while scanning a
-#: fraction of what it scans locally — passing while checking less, which is the
-#: vacuity class release.yml exists to close. So: if any surface is absent, the
-#: whole module skips with a reason naming what was missing, and the assertions
-#: are made where they can actually be made (the ci.yml `test` job, which has a
-#: full checkout).
-_REQUIRED_SURFACES = {
-    "README.md": README,
-    "pyproject.toml": PYPROJECT,
-    "CHANGELOG.md": ROOT / "CHANGELOG.md",
-    "cdfibenchmark/": ROOT / "cdfibenchmark",
-    "examples/": ROOT / "examples",
-}
-_MISSING = sorted(n for n, path in _REQUIRED_SURFACES.items() if not path.exists())
 
-#: The all-or-nothing rule above was right and is unchanged. What it could not do
-#: was tell an artifact run apart from a DELETION: `exists()` is False in both,
-#: so deleting examples/ from a checkout made this whole module answer "skipped —
-#: expected in an installed-artifact run", which is a false statement about a
-#: checkout and leaves eleven gates certifying nothing while reporting no
-#: problem. A gate that skips when it should fail is the same defect as a gate
-#: that passes when it should fail.
-#:
-#: Either anchor means "there is a repository here", and release.yml's wheel-tests
-#: and sdist-tests directories have neither.
-_IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
-
-pytestmark = pytest.mark.skipif(
-    bool(_MISSING) and not _IS_REPO_TREE,
-    reason=(
-        "no repository tree here (no cdfibenchmark/, no .git) and these repo-root "
-        "surfaces are absent, so these gates cannot run in full: "
-        + ", ".join(_MISSING)
-        + " (expected in an installed-artifact run; they run in the `test` job)"
-    ),
+#: Every surface this module reads, across all of its gates. Membership here is
+#: not by itself a requirement: a surface is required WHERE IT IS READABLE, and
+#: `layout.require` decides what an absence means -- deletion (red, by name) or
+#: an omission the distribution declares (skip, by name, quoting the
+#: declaration).
+_REQUIRED_SURFACES = (
+    "README.md", "pyproject.toml", "CHANGELOG.md", "CONTRIBUTING.md",
+    "setup.py", "cdfibenchmark/", "tests/", "examples/",
 )
 
+#: (directory, glob) for the surfaces that are trees rather than single files.
+_SURFACE_GLOBS = {
+    "cdfibenchmark/": ("cdfibenchmark", "*.py"),
+    "tests/": ("tests", "*.py"),
+    "examples/": ("examples", "*.ipynb"),
+}
 
-def test_every_surface_these_gates_need_is_present_in_a_repo_tree():
+#: The surfaces the cert scan sweeps: everything above EXCEPT CHANGELOG.md.
+#:
+#: The changelog is excluded because it must be able to DESCRIBE the false
+#: binding in order to record it -- the same allowance
+#: `test_calibration_claims.py` makes for the 91.12 retraction. It is still a
+#: required surface (deleting it is red); it is simply not a surface where
+#: naming the binding is a defect.
+_CERT_SCAN_SURFACES = tuple(s for s in _REQUIRED_SURFACES if s != "CHANGELOG.md")
+
+
+def _read_surface(name: str) -> dict:
+    """Every file of one surface, keyed by repo-relative path.
+
+    Not `if p.exists()` per file. The caller has already been through
+    `layout.require`, so reaching here means the surface is readable; a silent
+    per-file skip at THIS level would shrink the scan without shrinking the
+    pass.
+    """
+    if name not in _SURFACE_GLOBS:
+        path = layout.SURFACES[name]
+        return {name: path.read_text()}
+    sub, pattern = _SURFACE_GLOBS[name]
+    d = ROOT / sub
+    return {str(p.relative_to(ROOT)): p.read_text()
+            for p in sorted(d.rglob(pattern))}
+
+
+def test_every_surface_this_module_reads_is_present_or_declared_absent():
     """A deleted surface must be RED here, never a skip.
 
-    Reached only inside a repository tree, where "examples/ is missing" can only
-    mean it was deleted or moved — never "we are testing a wheel".
+    The distinction a bare `exists()` cannot draw: "examples/ is absent" is true
+    both when someone deleted it and when we are standing in the sdist that
+    prunes it on purpose. Only the first may be red, and only an artifact that
+    states its own contents may excuse the second -- see `tests/_layout.py`.
+
+    Skipped where there is no source tree, because nothing was deleted there.
     """
-    assert not _MISSING, (
-        f"this is a repository tree (cdfibenchmark/ or .git/ is present) but these "
-        f"surfaces are unreadable: {', '.join(_MISSING)}. That is a deleted or "
-        f"moved surface, not an installed-artifact run, so it fails instead of "
-        f"skipping."
+    if not layout.IS_REPO_TREE:
+        pytest.skip(
+            "no source tree here (no cdfibenchmark/, no .git); nothing was "
+            "deleted, and each gate declares its own surfaces via layout.require"
+        )
+    _, declared, undeclared = layout.classify(*_REQUIRED_SURFACES)
+    assert not undeclared, (
+        f"a source tree is present here (cdfibenchmark/ or .git/) but these "
+        f"surfaces are unreadable: {', '.join(undeclared)}. Nothing declares "
+        f"them absent, so that is a deleted or moved surface, not an "
+        f"installed-artifact run, and it fails instead of skipping. "
+        f"(Declared absent, and therefore fine: "
+        f"{', '.join(sorted(declared)) or 'nothing'}.)"
     )
 
+
+def test_only_a_declared_omission_is_ever_excused():
+    """The vacuity guard on the excusing mechanism itself.
+
+    `absence_is_declared` is the one thing standing between "skip because the
+    tarball prunes it" and "skip because anything missing is fine", and a
+    version of it that returned a reason for everything would turn every gate
+    in this module into a silent pass. So pin what it must and must not excuse,
+    in whatever layout this happens to be running in.
+
+    Reads no files, so it runs in EVERY layout -- checkout, tarball root,
+    git archive, constructed sdist dir, wheel dir.
+    """
+    for never_excused in ("README.md", "pyproject.toml", "cdfibenchmark/"):
+        assert layout.absence_is_declared(never_excused) is None, (
+            f"{never_excused} ships in the sdist and is in the repository; no "
+            f"layout may excuse its absence, but absence_is_declared did"
+        )
+    excuse = layout.absence_is_declared("examples/")
+    if layout.IS_SDIST_ROOT:
+        assert excuse is not None, (
+            "this is an unpacked sdist root, where MANIFEST.in's `prune "
+            "examples` is what makes examples/ legitimately absent, but "
+            "absence_is_declared would call that a deletion"
+        )
+    else:
+        assert excuse is None, (
+            "examples/ may only be excused inside an unpacked sdist root. "
+            "Outside one, its absence is a deletion and must be red."
+        )
+
+
+@layout.needs("MANIFEST.in")
+def test_the_manifest_reader_still_finds_the_prune_it_reads():
+    """A reader that silently returns nothing excuses nothing -- and pins nothing.
+
+    `manifest_exclusions` is safe when it breaks (an empty set excuses no
+    absence, so surfaces go red rather than skipped), but "safe when broken" is
+    not the same as "working". If it stopped parsing, the tarball-root run would
+    go red again with a confusing message rather than skipping examples/ by
+    name. Assert it is really reading this repository's file.
+
+    Red-proving this is one edit: change `prune examples` in MANIFEST.in to
+    `recursive-exclude examples *`, which is not a whole-surface exclusion.
+    """
+    exclusions = layout.manifest_exclusions()
+    assert "examples" in exclusions, (
+        f"MANIFEST.in is present but the reader did not find `examples` among "
+        f"its whole-surface exclusions (found: {sorted(exclusions) or 'nothing'}). "
+        f"Either the prune directive was reworded, or the reader stopped "
+        f"parsing -- and the tarball-root layout depends on this answer."
+    )
+    assert "README.md" not in exclusions, (
+        "the reader reports README.md as excluded from the distribution; "
+        "MANIFEST.in `include`s it, so the reader is matching the wrong lines"
+    )
+
+
 #: Claims retired in earlier releases. None may reappear on ANY shipped surface.
+#:
+#: SCOPE, STATED HONESTLY: the gate below reads pyproject's [project] table and
+#: nothing else. This list is NOT swept across `_read_surface`, which is why the
+#: demo notebook can and does still say "CET1" (examples/cdfi_benchmarking_demo
+#: .ipynb:13, `grep -n CET1 examples/*.ipynb`). Widening it is a live claim
+#: correction and belongs with the other prose corrections, not with a change to
+#: how layouts are detected.
 RETIRED_CLAIMS = ["CET1", "Tier 1 Capital Ratio", "INSTNAME"]
 
 #: (cert, name) bindings that are FALSE. Verified against FDIC /institutions.
 FALSE_CERT_BINDINGS = [(57542, "Broadway Federal")]
-
-
-def _shipped_text():
-    """Every surface a user reads, keyed by path.
-
-    examples/ is pruned from the sdist but is read on GitHub, and that is
-    where the wrong binding was most emphatic — the demo notebook attributed
-    "one of the largest Black-owned banks" to a CERT belonging to Toyota
-    Financial Savings Bank. A surface not in the tarball is still a surface.
-    """
-    out = {}
-    for p in [README, PYPROJECT, ROOT / "CHANGELOG.md"]:
-        # Not `if p.exists()`. The module-level skipif already guaranteed these
-        # are here; a silent skip at THIS level would shrink the scan surface
-        # without shrinking the pass.
-        out[p.name] = p.read_text()
-    for sub, pattern in (("cdfibenchmark", "*.py"), ("tests", "*.py"),
-                         ("examples", "*.ipynb")):
-        d = ROOT / sub
-        assert d.exists(), f"expected surface {sub} is missing"
-        for p in sorted(d.rglob(pattern)):
-            out[str(p.relative_to(ROOT))] = p.read_text()
-    return out
-
 
 #: A line may NAME a false binding in order to correct or document it.
 _NEGATIONS = ("is not", "is NOT", "previously", "no longer", "was ",
@@ -161,6 +247,7 @@ _NEGATIONS = ("is not", "is NOT", "previously", "no longer", "was ",
 
 
 @pytest.mark.parametrize("claim", RETIRED_CLAIMS)
+@layout.needs("pyproject.toml")
 def test_retired_claims_do_not_reappear_in_package_metadata(claim):
     """The PyPI description is a shipped surface and drifts on its own."""
     meta = _project_meta()
@@ -172,14 +259,29 @@ def test_retired_claims_do_not_reappear_in_package_metadata(claim):
 
 
 @pytest.mark.parametrize("cert,name", FALSE_CERT_BINDINGS)
-def test_no_surface_binds_a_cert_to_the_wrong_institution(cert, name):
-    """A wrong cert->name binding runs, returns data, and names another bank."""
+@pytest.mark.parametrize("surface", _CERT_SCAN_SURFACES)
+def test_no_surface_binds_a_cert_to_the_wrong_institution(surface, cert, name):
+    """A wrong cert->name binding runs, returns data, and names another bank.
+
+    PARAMETRIZED BY SURFACE, not a single sweep, because the two layouts that
+    matter disagree about exactly one surface and the disagreement has to be
+    visible. `examples/` is pruned from the sdist and read on GitHub — the
+    notebook is where the wrong binding was most emphatic, attributing "one of
+    the largest Black-owned banks" to a CERT belonging to Toyota Financial
+    Savings Bank. At the tarball root that surface is legitimately absent; on
+    GitHub, in a checkout and in a `git archive` it is present and must be
+    scanned. One sweep can only answer both by shrinking silently. Eight test
+    ids answer per surface, and the report says which one skipped and why.
+
+    A surface deleted from a source tree fails here BY NAME rather than
+    skipping: `layout.require` draws that line.
+    """
+    layout.require(surface)
     offenders = []
-    for path, text in _shipped_text().items():
-        # The changelog and this gate itself must be able to DESCRIBE the
-        # defect in order to record and detect it. Compare on the dict key,
-        # which is a repo-relative path, not a bare filename.
-        if path == "CHANGELOG.md" or Path(path).name == Path(__file__).name:
+    for path, text in _read_surface(surface).items():
+        # This gate itself must be able to describe the defect in order to
+        # detect it. Compare on the dict key, which is a repo-relative path.
+        if Path(path).name == Path(__file__).name:
             continue
         for line_no, line in enumerate(text.splitlines(), 1):
             if str(cert) not in line or name.lower() not in line.lower():
@@ -193,6 +295,7 @@ def test_no_surface_binds_a_cert_to_the_wrong_institution(cert, name):
     )
 
 
+@layout.needs("README.md")
 def test_readme_discloses_the_period_basis():
     """B2's ruling has to be readable by someone who never opens the source."""
     text = README.read_text().lower()
@@ -201,6 +304,7 @@ def test_readme_discloses_the_period_basis():
     assert "nimy" in text
 
 
+@layout.needs("README.md")
 def test_readme_marks_house_thresholds_as_house():
     text = README.read_text()
     assert "HOUSE" in text, (
@@ -209,6 +313,7 @@ def test_readme_marks_house_thresholds_as_house():
     )
 
 
+@layout.needs("README.md")
 def test_readme_does_not_hand_type_a_test_count():
     """Six recorded instances of a hand-typed count in this portfolio.
 
@@ -221,12 +326,14 @@ def test_readme_does_not_hand_type_a_test_count():
     )
 
 
+@layout.needs("README.md")
 def test_readme_does_not_claim_credit_union_coverage():
     """The FDIC API covers FDIC-insured banks. Credit unions are NCUA."""
     text = README.read_text().lower()
     assert "credit union" not in text or "not" in text, "see explicit gate below"
 
 
+@layout.needs("README.md")
 def test_readme_credit_union_mention_is_an_exclusion_not_an_audience():
     text = README.read_text()
     for line in text.splitlines():
@@ -237,17 +344,20 @@ def test_readme_credit_union_mention_is_an_exclusion_not_an_audience():
             )
 
 
+@layout.needs("README.md")
 def test_readme_points_at_the_live_api_host():
     """banks.data.fdic.gov now 301-redirects to api.fdic.gov/banks."""
     from cdfibenchmark.data.schema import FDIC_API_BASE
     assert FDIC_API_BASE in README.read_text()
 
 
+@layout.needs("pyproject.toml")
 def test_version_is_bumped_for_a_release_that_changes_grades():
     meta = _project_meta()
     assert meta["version"] == "0.3.0"
 
 
+@layout.needs("CHANGELOG.md")
 def test_changelog_documents_the_current_version():
-    text = (ROOT / "CHANGELOG.md").read_text()
+    text = layout.SURFACES["CHANGELOG.md"].read_text()
     assert "## [0.3.0]" in text

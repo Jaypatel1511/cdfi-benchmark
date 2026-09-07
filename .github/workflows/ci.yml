@@ -3,12 +3,32 @@ name: CI
 # Continuous integration: build + test on every push and PR to main.
 # This workflow NEVER publishes and NEVER requests id-token. The release path
 # lives entirely in release.yml, gated on a tag push.
+#
+# WHY THIS WORKFLOW NOW CALLS THE ARTIFACT-LAYOUT GATE
+#
+# Until now `test` was the whole of CI: an editable install of the source tree,
+# run from the checkout root. It never built a wheel or an sdist and never
+# tested one. Every artifact-layout check lived in release.yml, which triggers
+# on a tag push — so the first time anything examined a distribution was after
+# the irreversible step. cdfi-benchmark 0.3.0 shipped to PyPI with its own
+# shipped suite failing at the tarball root and all eight of release.yml's
+# artifact jobs green. A PR can now no longer reach a tag without the wheel and
+# sdist layouts having been exercised on it.
+#
+# TRIGGER RULING. `push: [main]` + `pull_request: [main]` is kept, and
+# workflow_dispatch is added rather than widening push to '**'. A branch push
+# with no open PR does produce zero runs, which is a real hole — but a commit
+# cannot reach a tag without first reaching main, and every push to main runs
+# this workflow, so the pre-tag guarantee holds without doubling job count on
+# every PR branch (push and pull_request would both fire). workflow_dispatch
+# covers the case this leaves open: running the full gate on a branch on demand.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 # Least privilege. CI only reads the repo; no write scopes, no OIDC.
 permissions:
@@ -40,3 +60,48 @@ jobs:
         # The suite is fully mocked — no network. --import-mode=importlib is also
         # set in pyproject addopts; passed here explicitly as belt-and-suspenders.
         run: python -m pytest --import-mode=importlib
+
+  # The artifact-layout gate needs to know what version the built sdist must
+  # report. release.yml has a tag to compare against; a PR does not, so the
+  # answer here is pyproject's own version at the tested commit. That is a
+  # weaker assertion than the release one (it cannot catch a version that was
+  # never bumped) and is not pretending otherwise — its job is to catch an
+  # artifact that disagrees with the tree it was built from, e.g. a stale
+  # egg-info supplying an old version to the sdist build.
+  #
+  # tomllib, never sed/grep — same rule as release.yml's verify-version.
+  resolve-version:
+    name: Resolve pyproject version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Read version from pyproject.toml
+        id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          if [ -z "${VERSION}" ]; then
+            echo "::error::could not read [project].version from pyproject.toml"
+            exit 1
+          fi
+          echo "pyproject version: ${VERSION}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+  # Same body release.yml calls. Not a copy — see the header of
+  # artifact-layouts.yml for why this is a workflow_call and not a paste.
+  artifact-layouts:
+    name: Artifact layouts
+    needs: [resolve-version]
+    uses: ./.github/workflows/artifact-layouts.yml
+    with:
+      expected-version: ${{ needs.resolve-version.outputs.version }}
