@@ -92,13 +92,39 @@ def test_house_thresholds_are_named_house_at_the_constant(metric):
 
 
 def test_cited_thresholds_name_an_instrument():
-    """A non-HOUSE source must actually point at something checkable."""
-    for metric, cfg in BENCHMARKS.items():
-        src = cfg.get("source")
-        if src and src != "HOUSE":
-            assert any(tok in src for tok in ("CFR", "USC", "FDIC", "FFIEC")), (
-                f"{metric} declares source {src!r} which names no instrument"
-            )
+    """A non-HOUSE source must actually point at something checkable.
+
+    THE LOOP IS GUARDED BECAUSE IT CAN EMPTY, AND IT IS ONE EDIT FROM EMPTY.
+    Exactly one entry in BENCHMARKS is cited, so the filter below yields one
+    item; if that citation ever became "HOUSE" the loop would run zero times and
+    this gate would pass having checked nothing -- the same defect class as the
+    report-disclosure gate this release fixed, in the module that exists to
+    police attribution. Measured, python3.10, setting tier1_ratio's `source` to
+    `"HOUSE"` in schema.py:
+
+        PYTHONPATH=. pytest tests -q -k cited_thresholds_name_an_instrument
+            (before this guard)  ->  1 passed, 24 deselected
+            (after  this guard)  ->  1 failed, 24 deselected
+
+    That mutation was already red elsewhere -- `test_cited_threshold_shows_its_citation`
+    and two gates in this module gave `3 failed, 329 passed, 1 skipped` on the
+    full suite -- so this was a latent vacuity rather than an open hole. It is
+    fixed anyway, because "a gate that cannot be made to fail is a defect in the
+    gate" is this suite's rule and coverage sitting in another module is not the
+    same as this gate working.
+    """
+    cited = {metric: cfg["source"] for metric, cfg in BENCHMARKS.items()
+             if cfg.get("source") and cfg["source"] != "HOUSE"}
+    assert cited, (
+        "no entry in BENCHMARKS declares a non-HOUSE source, so this gate has "
+        "nothing to check and would pass while certifying nothing. Either every "
+        "threshold really is a house rule of thumb -- in which case delete this "
+        "gate deliberately and say so -- or a citation was dropped."
+    )
+    for metric, src in sorted(cited.items()):
+        assert any(tok in src for tok in ("CFR", "USC", "FDIC", "FFIEC")), (
+            f"{metric} declares source {src!r} which names no instrument"
+        )
 
 
 #: Which HOUSE_ prefix each metric's thresholds must come from. Kept explicit

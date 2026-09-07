@@ -7,6 +7,485 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > History prior to 0.2.0 predates this changelog and is not documented here.
 
+## [0.3.1] - 2026-09-07
+
+Packaging, release metadata and prose. **No library code changed.**
+`cdfibenchmark/` in this release is byte-identical to the package inside the
+published 0.3.0 wheel:
+
+    sha256 3f90077f200206a1d09929b868df2af43a6da325eb3e695da35f6f4ebbde9083
+
+A digest is only evidence if it can be recomputed, so here is exactly how it is
+aggregated — every `.py` under the package directory, ordered by its path
+RELATIVE TO THAT DIRECTORY, each path fed to the hash before its bytes. Run from
+the repository root, with the published wheel downloaded from PyPI beside it:
+
+    python3 - <<'PY'
+    import hashlib, pathlib, zipfile
+    def digest(pairs):
+        h = hashlib.sha256()
+        for name, data in sorted(pairs):
+            h.update(name.encode()); h.update(data)
+        return h.hexdigest()
+    pkg = pathlib.Path("cdfibenchmark")
+    print("tree :", digest((str(p.relative_to(pkg)), p.read_bytes())
+                           for p in pkg.rglob("*.py")))
+    z = zipfile.ZipFile("cdfi_benchmark-0.3.0-py3-none-any.whl")
+    print("wheel:", digest((n[len("cdfibenchmark/"):], z.read(n)) for n in z.namelist()
+                           if n.startswith("cdfibenchmark/") and n.endswith(".py")))
+    PY
+    -> tree : 3f90077f200206a1d09929b868df2af43a6da325eb3e695da35f6f4ebbde9083
+       wheel: 3f90077f200206a1d09929b868df2af43a6da325eb3e695da35f6f4ebbde9083
+
+11 files on each side. The number was published in this section without its
+method, which made it unreproducible: the two most obvious aggregations (bytes
+alone, and repository-relative paths plus bytes) give
+`0e1728af…` and `f10659e3…` instead.
+
+No metric, grade, threshold, peer-selection rule or rendered value moves.
+Nothing computed under 0.3.0 needs re-running.
+
+**If you installed with `pip install`, this release changes nothing for you.**
+It matters only if you downloaded the 0.3.0 *source tarball* and ran the test
+suite that ships inside it.
+
+### Fixed
+
+- **`PKG-INFO` was checked by filename, so a stray one excused real deletions —
+  and said something false about the tree while doing it.** The rule that lets a
+  distribution excuse a missing surface identified an unpacked sdist as
+  `(ROOT / "PKG-INFO").is_file()`. In a git checkout, python3.10:
+
+      : > PKG-INFO && rm -rf examples
+      PYTHONPATH=. pytest tests -q   ->  328 passed, 4 skipped   exit 0
+
+  A zero-byte file forgave a deleted directory, and the skip it printed read
+  *"this is an unpacked sdist root (PKG-INFO is present)"* with `.git` sitting
+  right there. The identification now tests three things and needs all of them:
+  the file parses as RFC-822 distribution metadata with `Metadata-Version` and
+  `Name`; that `Name` matches `[project].name` in this tree's `pyproject.toml`
+  (PEP 503 normalised); and there is no `.git`. The reason string quotes what
+  was observed rather than announcing a conclusion, so a skip printed here can
+  no longer assert something untrue about the tree it is printed in. Each part
+  is load-bearing, measured on the same mutation: zero-byte file in a checkout
+  → 2 failed; a *valid* PKG-INFO copied from the real sdist into a checkout →
+  2 failed; another package's PKG-INFO with no `.git` → 2 failed; the genuine
+  sdist tree (valid PKG-INFO, no `.git`) → 328 passed, 4 skipped, still
+  correctly excused. `.git` is a disqualifier only — it can refuse an excuse,
+  never grant one — because on its own it would leave a forged PKG-INFO
+  excusing deletions anywhere outside a checkout. Verified that no routine
+  command puts PKG-INFO in a checkout root: `setup.py sdist`, `setup.py
+  egg_info`, `python -m build`, `python -m build --sdist` and
+  `pip install -e .` all write it under `cdfi_benchmark.egg-info/` or not at
+  all.
+
+- **The wrong-cert scan passed vacuously when a surface's glob matched
+  nothing.** `layout.require` can only answer "the directory is there"; the
+  glob inside it decided what was actually read, and an empty match returned an
+  empty dict that the gate then asserted over. Measured at the previous commit,
+  python3.10, in a full checkout:
+
+      mv examples/cdfi_benchmarking_demo.ipynb examples/cdfi_benchmarking_demo.ipynb.bak
+      PYTHONPATH=. pytest tests -q   ->  329 passed, 3 skipped  (control: identical)
+      PYTHONPATH=. pytest tests/test_package_claims.py -q -k wrong_institution
+                                     ->  7 passed, 14 deselected
+
+  The `examples/` leg passed having read nothing — no skip, no reason. That leg
+  is the only automated defence on the demo notebook (retired claims are not
+  swept over `examples/`), and it is the gate that caught the fabricated peer
+  row this release removes. It disarmed on a rename, and would equally on a
+  jupytext conversion or an emptied directory. A surface that contributes zero
+  files to a scan is now RED by name, and there is no declaration that can
+  excuse it — `MANIFEST.in` declares absence, and this surface is present.
+  Red-proven four ways: rename → 1 failed; conversion to `.md` → 1 failed;
+  emptied directory → 1 failed; and the same shape forced on `tests/` → 1
+  failed.
+
+- **One line in `MANIFEST.in` could absorb the deletion of almost anything.**
+  The guard on the excusing mechanism named three never-excusable surfaces by
+  hand, leaving six of the nine in `SURFACES` absorbable. Re-derived at the root
+  of the 0.3.1 tarball, python3.10 — unpack, append the line, delete the file,
+  `PYTHONPATH=. pytest tests/ -q`:
+
+      control                                        328 passed,  4 skipped
+      rm CHANGELOG.md                                  9 FAILED, 314 passed
+      prune CHANGELOG.md      + rm CHANGELOG.md      316 passed, 11 skipped
+      exclude setup.py        + rm setup.py          327 passed,  5 skipped
+      exclude CONTRIBUTING.md + rm CONTRIBUTING.md   327 passed,  5 skipped
+
+  One appended line turned nine named failures into exit 0. Which surfaces a
+  distribution may omit is a policy, and nothing in the tree states it except
+  the very file being edited, so it is now written down once as
+  `layout.EXCUSABLE_SURFACES` and consulted by the excusing rule itself:
+  `MANIFEST.in` can only ever narrow the excuse, never widen it. The guard walks
+  all of `SURFACES` against that set instead of a shortlist, so a surface added
+  to `SURFACES` is never-excusable by default. A second gate fails on the
+  MANIFEST edit itself, in the pull request that makes it, rather than one
+  release later inside an artifact. With both in place the three absorptions
+  above give 10 failed, 3 failed and 3 failed.
+
+- **A gate that could not fail, and a claim in `README.md` that it could.**
+  `test_readme_does_not_claim_credit_union_coverage` asserted
+  `"credit union" not in text or "not" in text`; the second limb is true of
+  every README ever written, so the assertion had no red state. Appending
+  *"We proudly serve credit unions and CDFI loan funds."* left it PASSED while
+  its sibling gate failed on the same text. It is deleted rather than repaired,
+  because the honest version of it is the sibling. `README.md`'s "Every gate in
+  this suite was run RED before the fix it covers was written" could not be true
+  of it, and that sentence now records the exception instead of implying none.
+  The surviving gate had a vacuity of its own — its assertion sits inside a loop
+  over lines mentioning credit unions, so a README that stopped mentioning them
+  would have passed while certifying nothing — and it now requires the exclusion
+  to be stated. Red-proven both ways: the "we proudly serve" line → 1 failed;
+  deleting every credit-union line → 1 failed.
+
+  **AND THE SURVIVING GATE HAD THE SAME DEFECT AS THE ONE IT REPLACED.** The
+  paragraph above presented it as the honest version without recording what it
+  admitted. It accepted any of `"no "`, `"not "`, `"never"`, `"exclud"` anywhere
+  on the line — the same per-line, any-word shape as the `_NEGATIONS` exemption
+  three screens above it in the same file. Measured at 98d071a, python3.10,
+  appending one line to `README.md` and running `PYTHONPATH=. pytest tests -q`:
+
+      "We proudly serve credit unions, with no setup required."
+                                                 -> 330 passed, 3 skipped
+      "Credit unions are welcome; nothing is excluded from our audience."
+                                                 -> 330 passed, 3 skipped
+      "We proudly serve credit unions and CDFI loan funds."
+                                                 -> 1 failed, 329 passed, 3 skipped
+
+  Two sentences that offer the tool to institutions the FDIC API does not cover
+  went green, one of them on the word `excluded` itself. That is closed here
+  rather than deferred: the gate now requires a phrase that STATES non-coverage
+  (`not covered`, `does not cover`, `out of scope`, …; `exclud` is deliberately
+  not among them), reads the mention from prose with inline code spans removed
+  so the README can still quote the deleted assertion, and requires the
+  exclusion to appear in prose at least once rather than only inside a
+  quotation. Re-measured after the change, same commands, `pytest tests -q`:
+
+      "We proudly serve credit unions, with no setup required."   1 failed, 329 passed, 3 skipped
+      "Credit unions are welcome; nothing is excluded …"          1 failed, 329 passed, 3 skipped
+      "We proudly serve credit unions and CDFI loan funds."       1 failed, 329 passed, 3 skipped
+      "`ignore me` We proudly serve credit unions."               1 failed, 329 passed, 3 skipped
+      the exclusion clause deleted from the audience list         1 failed, 329 passed, 3 skipped
+      the exclusion weakened to "NCUA-regulated, which is a
+        different regulator"                                      1 failed, 329 passed, 3 skipped
+
+  **What it still does not catch, stated because the last version of this entry
+  did not:** a sentence that offers the tool AND contains an exclusion phrase —
+  *"We serve credit unions; other lenders are not covered."* — passes, because
+  deciding that needs the sentence parsed rather than matched. The scan is per
+  LINE, so a mention hard-wrapped across a newline is not seen at all. And
+  rewording the exclusion to a phrase not on the list fails LOUDLY, which is the
+  direction this suite takes deliberately. All three limits are written into the
+  gate's docstring next to the mutations that measured them.
+
+  The separate `_NEGATIONS` exemption in the cert-binding gate has the same
+  shape and is still deferred to 0.3.2, on the accurate description already
+  recorded at `tests/test_package_claims.py`.
+
+- **A report gate that certified nothing, and a `README.md` sentence asserting
+  there had been only one such gate.** `test_house_thresholds_are_marked_house_on_the_report`
+  asserted `"this tool's own" in report.lower() or "house" in report.lower()` —
+  a substring anywhere in the rendered document — as a stand-in for "the
+  threshold lines carry their attribution". Measured, python3.10, reducing the
+  HOUSE branch of `_threshold_line` (`cdfibenchmark/report/generator.py:116`) to
+  `" — not a regulatory or supervisory standard"`:
+
+      PYTHONPATH=. pytest tests -q   ->  330 passed, 3 skipped
+                                         (byte-identical to control)
+
+  Seven of the eight thresholds lost their attribution and nothing moved. What
+  held the assertion up was `cdfibenchmark/peers/selector.py:159`, a sentence
+  about *peer-group selection* — "…nearest-neighbour selection are this tool's
+  own choices (HOUSE)…" — that renders on every report. The gate now scans the
+  `**Benchmark:**` lines, requires the literal
+  `**this tool's own threshold (HOUSE)**` on each HOUSE line, derives how many
+  lines must carry it from `BENCHMARKS` instead of a typed count, and requires
+  every unmarked line to name an instrument. Red-proven: the mutation above →
+  `1 failed, 329 passed, 3 skipped`; replacing the marker with the *size-band*
+  wording, the nearest thing to a near-miss on the page → `1 failed, 329 passed,
+  3 skipped`. **No library code changed** — the rendered page already
+  distinguishes its three HOUSE attributions in words, so only the test was
+  asking the cheap question.
+
+  `README.md`'s "**One** had slipped past that rule" was written in the same
+  commit that this gate survived, and was false when written. That section no
+  longer gives a number: the instances found so far are listed, and the sentence
+  says why a tally there is not a claim this project can support.
+
+- **A threshold gate whose loop can empty, one edit away from empty.**
+  `test_cited_thresholds_name_an_instrument` looped over the entries in
+  `BENCHMARKS` declaring a non-HOUSE source. Exactly one does. Measured,
+  python3.10, setting `tier1_ratio`'s `source` to `"HOUSE"`:
+
+      PYTHONPATH=. pytest tests -q -k cited_thresholds_name_an_instrument
+        -> 1 passed, 24 deselected     (checking nothing)
+
+  The mutation itself was already red elsewhere — the full suite gave
+  `3 failed, 329 passed, 1 skipped` — so this was a latent vacuity, not an open
+  hole. It is fixed anyway: coverage in another module is not this gate working.
+  With the guard, the same mutation gives `1 failed, 24 deselected`.
+
+  Found by an AST sweep of every test function in `tests/` for three shapes:
+  assertions that sit ONLY inside a loop, `assert A or B`, and
+  `all(...)` / `not any(...)` / `not in` over a collection that could be empty.
+  Every flagged function was then ruled on individually. No count is given here
+  and none should be inferred: the sweep was throwaway audit tooling, is not
+  committed, and a tally nobody can re-run is the class of claim this release
+  spent most of its diff removing.
+
+  How each ruling was made, since a reading is not a measurement: the suite's
+  AST was rewritten to count how many times every assertion executes, and re-run
+  — the instrumented copy gave the same `330 passed, 3 skipped`. No flagged gate
+  executed zero assertions, so nothing in this tree is vacuous today. The one
+  above is recorded because it is one edit from vacuous; every other flagged
+  loop either iterates a literal written into the test, or is preceded by an
+  assertion that the collection is non-empty.
+
+- **`tests/_layout.py` claimed the `PKG-INFO` remedy closes a FORGED file. It
+  closes a STRAY one.** The module docstring said the `.git`-only alternative
+  was rejected because it "leaves a stray or forged PKG-INFO excusing deletions
+  anywhere else", implying the content and identity checks close both. They do
+  not. Measured, python3.10:
+
+      git archive HEAD | tar -x -C <dir> && cd <dir>
+      PYTHONPATH=. pytest tests -q                     ->  330 passed, 3 skipped
+      printf 'Metadata-Version: 2.1\nName: CDFI_Benchmark\nVersion: 0.3.1\n' >PKG-INFO
+      rm -rf examples
+      PYTHONPATH=. pytest tests -q                     ->  329 passed, 4 skipped
+
+  Three hand-written lines satisfy content and identity, and a `git archive`
+  tree has no `.git` to trip provenance. The claim is narrowed to what was
+  measured, and the docstring now records the bound: `EXCUSABLE_SURFACES` limits
+  the blast radius to `examples/`, so no surface this package ships can be
+  absorbed this way; the forgery is a deliberate act rather than a slip; and
+  closing it needs a signature or a trusted index, which is a different
+  mechanism from reading a file. Prose fix, no behaviour change.
+
+- **The MANIFEST gate said it catches the absorbing edit "where it is MADE". It
+  was literal-token only.** `MANIFEST.in` arguments are glob patterns, and the
+  gate compared surface names against them with `in`. Measured in a checkout,
+  python3.10:
+
+      echo 'exclude *.md' >>MANIFEST.in
+      PYTHONPATH=. pytest tests -q   ->  330 passed, 3 skipped     (silent)
+
+  and the sdist that edit builds ships no `CHANGELOG.md` and no
+  `CONTRIBUTING.md`, which its own tarball-root run reports as `10 failed`.
+  `test-sdist` catches that before a tag, so this was an overstatement rather
+  than an open hole. Matching is now glob-aware via
+  `layout.manifest_excludes_surface`, used ONLY by the offender gate: a broader
+  match there means more RED in the pull request that makes the edit, while the
+  same broadening inside `absence_is_declared` would let a glob start EXCUSING
+  deletions, so the excuse path deliberately keeps the literal test. Red-proven
+  after the change: `exclude *.md` → `1 failed, 329 passed, 3 skipped`;
+  `exclude setup.py` (the literal case, checked for regression) → `1 failed,
+  329 passed, 3 skipped`.
+
+- **`layout._project_name` read only one of the ways `[project].name` is
+  written, and refused a real sdist its own excuse.** It matched
+  `^name\s*=\s*"([^"]+)"\s*$` and never used `tomllib`, even on 3.11/3.12 where
+  `test_package_claims._project_meta` does. Two ordinary, valid TOML spellings
+  broke it. Measured at the root of the 0.3.1 tarball, python3.10, editing only
+  the name line:
+
+      control                              ->  329 passed, 4 skipped
+      name = 'cdfi-benchmark'              ->  2 failed, 328 passed, 3 skipped
+      name = "cdfi-benchmark"  # PyPI name ->  2 failed, 328 passed, 3 skipped
+
+  A correct source distribution was told its own `PKG-INFO` did not identify it.
+  It fails SAFE — loud red, long before a tag — which is why this was a defect
+  and not a blocker, but it is the cheap-question-nearby shape in the file whose
+  entire subject is not asking cheap questions. It now parses with `tomllib`
+  where that exists and falls back to a pattern accepting both quote styles and
+  a trailing comment on 3.9/3.10. After the change both spellings give
+  `329 passed, 4 skipped`, and a name that is NOT this package still refuses the
+  excuse (`name = "some-other-package"` → `2 failed, 328 passed, 3 skipped`),
+  so the safe direction is unchanged.
+
+- **`[build-system].requires` said `setuptools>=42`, and setuptools cannot read
+  this project's metadata until 61.0.0.** Every packaging field lives in the PEP
+  621 `[project]` table; setuptools older than 61 ignores that table entirely
+  and falls back to what `setup()` passes, which since this release is nothing.
+  The result is not an error. Measured, python3.10, on the unpacked 0.3.1 sdist:
+
+      pip wheel --no-deps --no-build-isolation, venv pinned per version
+        setuptools 60.10.0 -> "Successfully built UNKNOWN"
+                              UNKNOWN-0.0.0-py3-none-any.whl containing only
+                              its own dist-info — no package code — exit 0
+        setuptools 61.0.0  -> "Successfully built cdfi-benchmark"
+
+      python -m build --wheel --no-isolation, system setuptools 59.6.0
+        requires = ["setuptools>=42"] -> built UNKNOWN-0.0.0, exit 0
+        requires = ["setuptools>=61"] -> ERROR Unmet dependencies:
+                                         setuptools>=61, found 59.6.0
+
+  The floor is now 61 and a gate holds it there. No CI job could have seen this:
+  `python -m build` on a clean runner provisions the newest setuptools, so the
+  declared floor is never the version that runs. Stated precisely, because a
+  build requirement is a declaration and not every tool enforces it: `python -m
+  build` now refuses instead of shipping an empty wheel, `pip` with isolation
+  resolves the correct setuptools, and `pip wheel --no-build-isolation` checks
+  no build requirement at all and is unaffected by either floor.
+
+- **The test suite shipped inside the sdist failed when run from the tarball
+  root, and no CI job in the release that shipped it could see the failure.**
+  Three claim-gate modules asked one global question — "is a source tree present
+  here?" — and then used that single answer for every surface they read. An
+  unpacked sdist contains `cdfibenchmark/`, so it answered "yes"; but
+  `examples/` is pruned from the sdist deliberately (`MANIFEST.in` says so in
+  words), so those gates then demanded a directory the tarball is designed never
+  to contain. Reproduced against the artifact on PyPI, python3.11:
+
+      curl -L <the 0.3.0 sdist from files.pythonhosted.org> | tar xz
+      cd cdfi_benchmark-0.3.0 && PYTHONPATH=. pytest tests/ -q
+      -> 2 failed, 319 passed, 3 skipped
+
+  The gates now ask the question per surface — *is this surface readable here,
+  and if not, has the artifact I am standing in DECLARED that it omits it?* Only
+  an unpacked sdist can declare an omission (it is identified by `PKG-INFO`, and
+  the declaration is read from the `MANIFEST.in` that ships inside it), and only
+  for the surfaces it names. Anything else missing is still red. That logic
+  lives in the new `tests/_layout.py`, so it exists once rather than in three
+  copies that could drift.
+
+- **Why no CI job saw it.** Every artifact-layout check lived in `release.yml`,
+  which triggers on a *tag push* — the irreversible step. So a layout defect
+  could only ever be discovered by a release that had already happened, and
+  0.3.0 is exactly that: it shipped with its own suite red at the tarball root
+  and all eight of `release.yml`'s artifact jobs green, because every one of
+  them ran the suite from a constructed directory that structurally cannot reach
+  that layout. The layout jobs now live in a reusable
+  `.github/workflows/artifact-layouts.yml` called by BOTH `ci.yml` (on pull
+  request and push to main) and `release.yml` (on a tag), so the check that runs
+  before the tag is literally the same code as the check that runs at it, and a
+  commit cannot reach a tag without the wheel, sdist, constructed-directory and
+  tarball-root layouts having been exercised on it. A step that runs the shipped
+  suite from the tarball root — the layout `README.md` documents under "Running
+  Tests" — was added, because that is the layout none of the previous jobs could
+  reach.
+
+- **`setup.py` declared `version="0.2.1"` and shipped that inside the sdist of
+  every release since.** Nothing read it — `pyproject.toml` carries a PEP 621
+  `[project]` table and PEP 621 metadata wins over anything `setup()` passes, so
+  the copy was inert and free to rot, and no gate covered it. It is not bumped;
+  the duplicated `name`, `version` and `install_requires` are removed and the
+  file is now a bare PEP 517 shim, so there is exactly one declared version in
+  the repository. Verified that the distribution is unaffected: with the shim in
+  place `python -m build` produces a wheel of the same 15 entries with
+  `top_level.txt = ['cdfibenchmark']` and no `tests/*`, and an sdist whose file
+  list is unchanged.
+
+- **Two stale measured claims in the demo notebook, both live on GitHub.**
+  `examples/cdfi_benchmarking_demo.ipynb` advertised "CET1" among the metrics it
+  computes. This package computes no CET1 and never has: `tier1_ratio` is the
+  Tier 1 *leverage* ratio, a different regulatory measure. The same claim was
+  struck from `pyproject.toml`'s `description` in 0.3.0 for that reason; the
+  notebook was missed because the gate that catches retired claims reads only
+  pyproject's `[project]` table. Separately, the notebook's opening markdown had
+  been left half-edited by the 0.3.0 correction — three sentences interleaved,
+  including a fragment describing a real Los Angeles MDI that had been carried
+  over from the wrong-cert binding 0.3.0 removed. The fragment is deleted rather
+  than repaired: it made a claim about a real institution that nothing in this
+  package establishes.
+
+- **The notebook attributed invented financials to a real, named institution.**
+  0.3.0's correction replaced the wrong cert/name binding in the notebook's
+  first two cells and in its own claim gate, and its commit message said "all
+  surfaces corrected". That was not true. The side-by-side comparison table
+  further down still carried a real MDI by name and CERT, with entirely
+  fabricated assets, NIM, efficiency ratio, ROAA, Tier 1 and NPL figures,
+  printed under the heading "MDI Peer Comparison Table" — and, worse, sitting
+  directly beneath a row explicitly labelled `(SYNTHETIC)`, which made the
+  unlabelled row read as real by contrast. Every institution in that table is
+  now synthetic, with a cert outside the FDIC's issued range and a name carrying
+  the `(SYNTHETIC)` marker, and the cell and its heading say so. The existing
+  wrong-cert gate could not catch this: it scans for one specific known-false
+  pairing, not for real institutions carrying made-up numbers.
+
+- **The notebook told users to pull live data for a cert that is not issued.**
+  Its closing example read `get_financials(cert=99001)` under "To pull live
+  financials for any institution" — 99001 being the synthetic cert the same
+  notebook states is outside the FDIC's issued range. It now points at the same
+  real cert the README's Quickstart uses.
+
+- **The notebook still cited the retired API host.** Its footer gave
+  `banks.data.fdic.gov/api`, which now answers HTTP 301. 0.3.0 moved the package
+  and the README to `api.fdic.gov/banks` and left the notebook behind.
+
+### Known issues in 0.3.0 — published, not yanked
+
+0.3.0 remains on PyPI and is **not** being yanked. Yanking would push pinned
+users back to 0.2.1, which still carries the substantive correctness defects
+0.3.0 fixed — the grading direction, the period basis and the peer-composition
+errors — and those are far more consequential than this one.
+
+**What is wrong with 0.3.0.** The test suite inside the 0.3.0 **source tarball**
+fails when run from the tarball root:
+
+    cd cdfi_benchmark-0.3.0 && PYTHONPATH=. pytest tests/ -q
+    -> 2 failed, 319 passed, 3 skipped
+
+The two failures, on their own lines so they can be copied and run:
+
+    tests/test_package_claims.py::test_every_surface_these_gates_need_is_present_in_a_repo_tree
+    tests/test_package_claims.py::test_no_surface_binds_a_cert_to_the_wrong_institution[57542-Broadway Federal]
+
+Both fail for the same reason and it is a defect in the *gates*, not in the package: they
+demanded `examples/`, a directory `MANIFEST.in` deliberately prunes from the
+sdist. Nothing they were testing is actually wrong in 0.3.0.
+
+**What is NOT affected — stated precisely, so this caveat is not read more
+broadly than it is.** All measured against the published 0.3.0 artifacts,
+python3.11:
+
+- **The installed library.** The 0.3.0 wheel contains no tests at all (15
+  entries, top-level `cdfibenchmark` and `cdfi_benchmark-0.3.0.dist-info`), and
+  its package code is byte-identical to this release's. Every metric, grade,
+  threshold, peer group and report 0.3.0 produces is correct as documented.
+- **`pip install cdfi-benchmark==0.3.0`.** Unaffected in every respect. There is
+  nothing to do.
+- **Running the suite against the installed 0.3.0 wheel** — `294 passed, 25
+  skipped`, no failures.
+- **Running the shipped suite from a directory holding `tests/`, `README.md` and
+  `pyproject.toml`** (the layout every 0.3.0 CI job used) — `295 passed, 24
+  skipped`, no failures.
+
+So the defect is reachable by exactly one action: unpacking the 0.3.0 source
+tarball and running its suite from the tarball root. 0.3.1 fixes it; the same
+invocation against 0.3.1 passes.
+
+### Changed
+
+- **A deferral's stated scope was wrong and is corrected.** The round-3 commit
+  message describing the cert gate's per-line negation exemption said it was
+  "latent for line-shaped files, real for minified JSON". It is real for
+  ordinary Markdown. Appending one line to `README.md`, python3.10,
+  `PYTHONPATH=. pytest tests -q -k wrong_institution`:
+
+      "CERT 57542 is Broadway Federal Bank, and the sky was blue."  -> 7 passed
+      "CERT 57542 is Broadway Federal Bank, and the sky is  blue."  -> 1 failed
+      "CERT 57542 is Broadway Federal Bank. It was reported elsewhere."
+                                                                   -> 7 passed
+
+  Every wrapped prose paragraph is line-shaped for this purpose, so the hole is
+  live on the surfaces the gate most needs to cover. The deferral itself stands
+  — narrowing the exemption is gate logic and belongs in 0.3.2 with its own
+  red-proofs — but it is now deferred on an accurate description of what it
+  leaves open, recorded beside the code it describes rather than in a commit
+  message. A commit message cannot be corrected in place; this can.
+
+- The floor guarding against a silently-deselected sdist suite was re-derived.
+  Its justification still read "96 tests executed under this job's exact
+  invocation, half is 48, so the floor is 45" — a measurement the suite had
+  outgrown by more than a factor of three. Re-measured from the junit XML the
+  job itself emits: 309 executed, so the floor is now 150 by the same
+  already-written rule. This raises the threshold rather than lowering it; the
+  old floor let 264 of 309 tests be deselected without complaint. Two further
+  stale measurements in the same workflow, and one demonstration in it that had
+  become false outright, were re-run and rewritten with the command that
+  produced each number beside it.
+
 ## [0.3.0] - 2026-09-05
 
 Grading-direction, period-basis and peer-composition corrections. Every fix

@@ -31,9 +31,17 @@ tarball, python3.10::
 
 The obvious fix -- anchor on `.git` alone -- is WRONG, and measurably so. A
 GitHub zip download or `git archive` has no `.git` but DOES have `examples/`.
-Measured on `git archive HEAD | tar -x`::
+Measured on `git archive HEAD | tar -x`, at 0.3.1::
 
-    PYTHONPATH=. pytest tests -q   ->  321 passed, 3 skipped
+    PYTHONPATH=. pytest tests -q   ->  329 passed, 3 skipped
+
+(That figure read `321 passed, 3 skipped` when this module was written, and it
+was already wrong then: the same command at the commit that introduced the
+sentence also gives 329. Corrected in 0.3.1 by re-running it. The number is
+incidental to the argument -- what matters is that the layout HAS `examples/`
+and has no `.git` -- but a wrong measured number in a module about stale claims
+is the thing this repository keeps failing at, so it is re-run rather than
+deleted.)
 
 Under `.git`-only anchoring that layout stops classifying as a repository tree,
 the module skips as a unit, and the cert-binding gate goes silent on a layout
@@ -48,10 +56,82 @@ So the question is not "which global anchor". It is per surface:
 WHAT COUNTS AS A DECLARATION -- AND WHY ONLY AN SDIST CAN MAKE ONE
 ------------------------------------------------------------------
 A directory can only excuse an absence if it is a distribution that states its
-own contents. Exactly one layout here does that: an unpacked sdist, identified
-by `PKG-INFO` at its root. That file is written by the build backend into every
-sdist and is not a repository file -- verified absent from a fresh clone and
-from `git archive HEAD`, and present at the root of the 0.3.0 tarball.
+own contents. Exactly one layout here does that: an unpacked sdist.
+
+IDENTIFYING ONE IS NOT A FILENAME TEST. Until this change the module asked
+
+    IS_SDIST_ROOT = (ROOT / "PKG-INFO").is_file()
+
+which is a cheap local question standing in for the one it means. Measured in a
+full git checkout at 6097238, python3.10:
+
+    : > PKG-INFO && rm -rf examples
+    PYTHONPATH=. pytest tests -q   ->  328 passed, 4 skipped   exit 0
+
+A zero-byte file excused a real deletion, and the skip it printed asserted
+"this is an unpacked sdist root (PKG-INFO is present)" in a tree with `.git`
+sitting beside it. That is a false statement about the tree, printed as the
+reason a deletion was forgiven.
+
+So the question is now asked directly, in three parts, all of which must hold:
+
+    1. CONTENT.   The file parses as RFC-822 distribution metadata carrying
+       `Metadata-Version` and `Name`. An empty or arbitrary file does not.
+    2. IDENTITY.  That `Name`, normalised per PEP 503, equals `[project].name`
+       in THIS tree's pyproject.toml. Metadata about some other package is not
+       this tree declaring its own contents. `Version` is deliberately NOT
+       compared: in a real sdist the two always agree, and the only tree where
+       they can differ is one somebody is editing in place, where the extra
+       false RED buys nothing the identity check has not already bought.
+    3. PROVENANCE. There is no `.git`. A working checkout is not a
+       distribution, whatever files have been dropped into it.
+
+Part 3 is a DISQUALIFIER, not a second proxy for the question: it can only ever
+refuse an excuse, never grant one. It was rejected as the whole remedy for
+exactly the reason a proxy is the wrong shape -- on its own it closes the git
+checkout and leaves a STRAY PKG-INFO excusing deletions anywhere else.
+
+WHAT PARTS 1 AND 2 DO NOT CLOSE, STATED PLAINLY. They close the STRAY file --
+the zero-byte or arbitrary one that a command or a slip leaves behind. They do
+not close a FORGED one, and the sentence here used to claim they did. Three
+lines of correct, hand-written metadata satisfy content and identity, and a
+`git archive` tree has no `.git` to trip provenance. Measured, python3.10:
+
+    git archive HEAD | tar -x -C <dir> && cd <dir>
+    PYTHONPATH=. pytest tests -q          ->  330 passed, 3 skipped   (control)
+
+    printf 'Metadata-Version: 2.1\nName: CDFI_Benchmark\nVersion: 0.3.1\n' >PKG-INFO
+    rm -rf examples
+    PYTHONPATH=. pytest tests -q          ->  329 passed, 4 skipped   exit 0
+
+The deletion was excused. Three things bound what that buys and are the reason
+this is recorded rather than fixed here: the blast radius is `EXCUSABLE_SURFACES`
+-- `examples/` and nothing else, so no surface this package ships can be
+absorbed this way, which `test_only_a_declared_omission_is_ever_excused` holds
+exhaustively; the forgery is a deliberate act, not a slip, and this module's
+subject is telling a deletion from a declared omission, not defending against an
+author who is lying to their own test suite; and closing it needs a signature or
+a trusted index, which is a different mechanism from reading a file. So the
+claim is narrowed to what was measured -- stray, not forged.
+
+Part 3 costs nothing in normal development, because no routine command writes
+PKG-INFO to a checkout root. Measured on a copy of this repo, python3.10, each
+in a fresh copy (`cp -a`), checking for `./PKG-INFO` afterwards:
+
+    python3 setup.py sdist                       -> root PKG-INFO: no
+    python3 setup.py egg_info                    -> root PKG-INFO: no
+    python3 -m build                             -> root PKG-INFO: no
+    python3 -m build --sdist                     -> root PKG-INFO: no
+    python3 -m pip install -e . --no-deps        -> root PKG-INFO: no
+
+The first four write it under `cdfi_benchmark.egg-info/` instead. So the only
+trees part 3 disqualifies are an unpacked sdist somebody has `git init`ed or is
+editing in place -- working trees by then, and neither may excuse a deletion.
+
+Whatever the answer, the reason string records WHAT WAS OBSERVED -- the parsed
+`Metadata-Version`, the `Name` it matched, and the absence of `.git` -- rather
+than announcing a conclusion about the tree. A skip message is a claim like any
+other, and this one was false.
 
 The declaration itself is read from `MANIFEST.in`, which SHIPS INSIDE the sdist
 (verified in the 0.3.0 tarball listing) and which is the file a maintainer edits
@@ -72,17 +152,30 @@ CONSEQUENTLY
 ------------
     checkout (.git)          nothing is excused. Every absence is a deletion.
     git archive / zip        nothing is excused. Every absence is a deletion.
-    unpacked sdist root      an absence MANIFEST.in declares is excused BY NAME;
-                             any other absence is a broken tarball -> RED.
+    unpacked sdist root      an absence is excused BY NAME when this module's
+                             policy allows that surface to be omitted AND
+                             MANIFEST.in declares it; any other absence is a
+                             broken tarball -> RED.
     constructed test dir     no source tree at all. Absences skip, per gate,
                              over that gate's OWN coverage set -- never the
                              whole module, which is how eight assertions that
                              only need README.md and pyproject.toml were being
                              switched off in a directory that HAS both.
 """
+import email.parser
+import fnmatch
 import pathlib
+import re
 
 import pytest
+
+try:                      # 3.11+
+    import tomllib
+except ModuleNotFoundError:
+    try:                  # 3.9/3.10 with the backport available
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 
 #: The tree under test. `tests/` sits directly under it in every layout.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -108,10 +201,141 @@ SURFACES = {
 #: PARTICULAR surface ought to be here; that is `absence_is_declared` below.
 IS_REPO_TREE = (ROOT / "cdfibenchmark").is_dir() or (ROOT / ".git").exists()
 
-#: An unpacked sdist root. PKG-INFO is written into every sdist by the build
-#: backend and is not a repository file, so this is a positive identification
-#: rather than an inference from what is missing.
-IS_SDIST_ROOT = (ROOT / "PKG-INFO").is_file()
+#: The ONLY surfaces whose absence any distribution may ever excuse.
+#:
+#: WHY A WRITTEN-DOWN SET, AND WHY IT IS NOT THE ANTI-PATTERN IT RESEMBLES.
+#: "Which surfaces must this project ship?" is a POLICY. Nothing in the tree
+#: states it: the one file that says what ships is MANIFEST.in, and MANIFEST.in
+#: is precisely the file a careless edit changes. A rule that consults only
+#: MANIFEST.in therefore lets ONE LINE absorb a real deletion. Measured at the
+#: root of the 0.3.1 tarball, python3.10, before this set existed:
+#:
+#:     control                                       -> 328 passed,  4 skipped
+#:     rm CHANGELOG.md                               ->   9 failed, 314 passed
+#:     echo 'prune CHANGELOG.md' >>MANIFEST.in; rm CHANGELOG.md
+#:                                                   -> 316 passed, 11 skipped
+#:     echo 'exclude setup.py' >>MANIFEST.in; rm setup.py
+#:                                                   -> 327 passed,  5 skipped
+#:     echo 'exclude CONTRIBUTING.md' >>MANIFEST.in; rm CONTRIBUTING.md
+#:                                                   -> 327 passed,  5 skipped
+#:
+#: (each: `tar xzf`, edit, `cd <root> && PYTHONPATH=. pytest tests/ -q`). One
+#: appended line turned nine named failures into exit 0.
+#:
+#: So the policy lives HERE, where changing it is a reviewable edit next to the
+#: reasoning, and MANIFEST.in can only ever NARROW the excuse: a surface must be
+#: in this set AND be named by MANIFEST.in before its absence is forgiven. The
+#: cost of forgetting to add a surface here is a false RED -- one loud line. The
+#: cost of the shape it replaces was a silent green.
+#:
+#: It is checked EXHAUSTIVELY against `SURFACES`, not against a hand-typed list
+#: of the never-excusable, by `test_only_a_declared_omission_is_ever_excused`.
+#: Adding a surface to `SURFACES` therefore makes it never-excusable by default,
+#: and making it excusable is a deliberate edit to this line.
+EXCUSABLE_SURFACES = frozenset({"examples/"})
+
+
+#: `[project].name` when it is written as a double-quoted or single-quoted
+#: basic string, with an optional trailing comment. Both quote styles and a
+#: trailing `#` comment are ordinary, valid TOML, and the previous pattern --
+#: `^name\s*=\s*"([^"]+)"\s*$` -- read neither. That is the cheap question
+#: standing in for the real one, in the module whose whole subject is not doing
+#: that. Measured at the root of the 0.3.1 tarball, python3.10, editing only the
+#: name line in pyproject.toml and running `PYTHONPATH=. pytest tests -q`:
+#:
+#:     control                              329 passed, 4 skipped
+#:     name = 'cdfi-benchmark'                2 FAILED, 328 passed, 3 skipped
+#:     name = "cdfi-benchmark"  # PyPI name   2 FAILED, 328 passed, 3 skipped
+#:
+#: A real, correct sdist was refused its own excuse. It fails SAFE -- loud red,
+#: caught long before a tag -- which is why this was a defect and not a blocker.
+#: Multi-line and literal (triple-quoted) strings are still not read: they are
+#: not a spelling anyone writes a project name in, and an unread name returns ""
+#: which refuses the excuse, so the failure direction is unchanged.
+_NAME_LINE = re.compile(r"""^name\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:\#.*)?$""")
+
+
+def _project_name() -> str:
+    """`[project].name` as declared in THIS tree, or "" if it cannot be read.
+
+    It must never answer with a name it did not actually read. "" makes the
+    identity check below fail, which makes the tree NOT an sdist root, which
+    makes an absence RED rather than excused -- the safe direction, preserved on
+    every path through this function including a parser raising.
+
+    WHY THIS NOW USES `tomllib` WHERE IT EXISTS. `_project_meta` in
+    `test_package_claims.py` already does, and hand-rolling a second, narrower
+    reader of the same key in the same tree is how two answers to one question
+    drift apart. The hand-rolled reader here is the fallback for 3.9 and 3.10,
+    where no TOML parser is in the standard library and the CI matrix still runs
+    -- the same reason `_project_meta` carries one.
+    """
+    path = SURFACES["pyproject.toml"]
+    if not path.is_file():
+        return ""
+    text = path.read_text()
+
+    if tomllib is not None:
+        try:
+            name = tomllib.loads(text)["project"]["name"]
+        except Exception:
+            return ""      # unparsable or absent -> read nothing -> excuse nothing
+        return name if isinstance(name, str) else ""
+
+    in_project = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_project = stripped == "[project]"
+            continue
+        if not in_project:
+            continue
+        m = _NAME_LINE.match(stripped)
+        if m:
+            return m.group(1) if m.group(1) is not None else m.group(2)
+    return ""
+
+
+def _normalised(name: str) -> str:
+    """PEP 503 name normalisation: `cdfi_benchmark` and `cdfi-benchmark` are one."""
+    return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+def _sdist_root_evidence():
+    """What was OBSERVED about this tree, or None if it is not an sdist root.
+
+    Returns the sentence the skip message will quote, so the message can only
+    ever state findings this function actually made. See the module docstring
+    for why each of the three parts is here and what a filename test let past.
+    """
+    if (ROOT / ".git").exists():
+        return None
+    path = ROOT / "PKG-INFO"
+    if not path.is_file():
+        return None
+    meta = email.parser.Parser().parsestr(path.read_text(errors="replace"))
+    metadata_version, name = meta.get("Metadata-Version"), meta.get("Name")
+    if not metadata_version or not name:
+        return None
+    declared = _project_name()
+    if not declared or _normalised(name) != _normalised(declared):
+        return None
+    return (
+        f"the PKG-INFO at this root parses as distribution metadata "
+        f"(Metadata-Version: {metadata_version}) naming {name!r}, which matches "
+        f"[project].name in this tree's pyproject.toml, and there is no .git "
+        f"here -- so this tree is an unpacked source distribution of this "
+        f"package and not a working checkout"
+    )
+
+
+#: Evidence that this tree is an unpacked sdist root, or None. Not a filename
+#: test: content, identity and provenance, all three. The string it holds is the
+#: only thing any skip is allowed to say about why the tree qualified.
+SDIST_ROOT_EVIDENCE = _sdist_root_evidence()
+
+#: The yes/no, for the gates that need only that.
+IS_SDIST_ROOT = SDIST_ROOT_EVIDENCE is not None
 
 
 def _manifest_token(surface: str) -> str:
@@ -151,19 +375,66 @@ def manifest_exclusions():
     return frozenset(out)
 
 
+def manifest_excludes_surface(surface: str) -> str:
+    """The MANIFEST.in pattern that would keep `surface` out of the sdist, or "".
+
+    GLOB-AWARE, AND DELIBERATELY NOT USED BY `absence_is_declared`.
+    `manifest_exclusions` returns the directive arguments verbatim, and
+    MANIFEST.in arguments are GLOB PATTERNS, not literal names: `exclude *.md`
+    removes README.md, CHANGELOG.md and CONTRIBUTING.md from the distribution.
+    A literal `token in exclusions` test cannot see that. Measured in a checkout,
+    python3.10, appending one line to MANIFEST.in:
+
+        exclude *.md
+        PYTHONPATH=. pytest tests -q      ->  330 passed, 3 skipped   (silent)
+
+    and the sdist that edit builds loses CHANGELOG.md and CONTRIBUTING.md, which
+    the tarball-root run then reports as `10 failed`.
+
+    THE TWO CALLERS PULL IN OPPOSITE DIRECTIONS, WHICH IS WHY THERE ARE TWO
+    FUNCTIONS. Matching more patterns makes the OFFENDER gate
+    (`test_manifest_excludes_no_surface_the_policy_requires_this_package_to_ship`)
+    stricter -- more RED, in the pull request that makes the edit. It would make
+    `absence_is_declared` LOOSER -- a glob would start excusing absences, which
+    is a deletion going green. So the excuse path keeps the literal test and
+    this one is separate, and that asymmetry is the point rather than an
+    oversight.
+
+    Returns the matching pattern (truthy) so a failure can name what matched.
+    """
+    token = _manifest_token(surface)
+    for pattern in sorted(manifest_exclusions()):
+        if token == pattern or fnmatch.fnmatchcase(token, pattern):
+            return pattern
+    return ""
+
+
 def absence_is_declared(surface: str):
     """Why this surface's absence is EXPECTED here, or None if it is not.
 
     None means "nothing here declares this absence", which -- inside a source
     tree -- means somebody deleted or moved it.
+
+    Three things must all hold, and each closes a different hole:
+
+    * this project's POLICY allows a distribution to omit the surface at all
+      (`EXCUSABLE_SURFACES`), so one appended MANIFEST.in line cannot absorb a
+      deletion of something this package actually ships;
+    * this tree really is an unpacked sdist (`_sdist_root_evidence`), tested by
+      content, identity and provenance rather than by a filename;
+    * MANIFEST.in, which ships inside that sdist, names the surface in a
+      whole-surface exclusion -- so deleting `prune examples` makes the tarball
+      start REQUIRING examples/ again, with no second flag to remember.
     """
-    if not IS_SDIST_ROOT:
+    if surface not in EXCUSABLE_SURFACES:
+        return None
+    if SDIST_ROOT_EVIDENCE is None:
         return None
     token = _manifest_token(surface)
     if token not in manifest_exclusions():
         return None
     return (
-        f"this is an unpacked sdist root (PKG-INFO is present) and MANIFEST.in "
+        f"{SDIST_ROOT_EVIDENCE}; and MANIFEST.in, which ships inside it, "
         f"declares {token!r} excluded from the distribution, so {surface} is "
         f"absent by design and not by deletion"
     )
