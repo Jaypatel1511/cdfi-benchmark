@@ -2,6 +2,8 @@
 FDIC BankFind Suite API wrapper.
 Free public API — no authentication required.
 """
+import datetime
+
 import requests
 import pandas as pd
 from typing import Optional
@@ -403,6 +405,18 @@ def _coerce_float(row: dict, key: str, *, absent, ratio_class: bool = False,
     return f
 
 
+
+def _utc_now() -> str:
+    """The moment a row was read off the wire, as YYYY-MM-DD HH:MM:SS UTC.
+
+    Recorded at PARSE time rather than at request time because parsing is the
+    last point that is per-row: a peer fetch returns hundreds of rows from one
+    request, and stamping them all with the request moment would be close
+    enough to true never to be questioned and still not be what it says.
+    """
+    return datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC")
+
 def _parse_institution(row: dict) -> InstitutionProfile:
     """Parse a raw FDIC financials row into an InstitutionProfile, failing loud.
 
@@ -435,6 +449,7 @@ def _parse_institution(row: dict) -> InstitutionProfile:
 
     return InstitutionProfile(
         cert=cert,
+        retrieved_at=_utc_now(),
         name=str(row.get("NAME", "Unknown")),
         city=str(row.get("CITY", "")),
         state=str(row.get("STALP", "")),

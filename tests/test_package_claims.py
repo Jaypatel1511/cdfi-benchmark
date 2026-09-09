@@ -698,10 +698,56 @@ def test_the_declared_build_requirement_can_read_this_metadata():
 @layout.needs("pyproject.toml")
 def test_version_is_bumped_for_a_release_that_changes_grades():
     meta = _project_meta()
-    assert meta["version"] == "0.3.1"
+    assert meta["version"] == "0.3.2"
 
 
 @layout.needs("CHANGELOG.md")
 def test_changelog_documents_the_current_version():
     text = layout.SURFACES["CHANGELOG.md"].read_text()
-    assert "## [0.3.1]" in text
+    assert "## [0.3.2]" in text
+
+
+@layout.needs("pyproject.toml")
+def test_the_pep639_license_form_declares_the_floor_it_needs():
+    """The SPDX license expression and the setuptools floor must move together.
+
+    `license = {text = "MIT"}` is the deprecated table form; setuptools has
+    announced its removal for 2027-02-18. The replacement is a bare SPDX
+    expression, `license = "MIT"`, which setuptools only learned to read in
+    77.0.0 -- so switching the form without raising the floor declares a build
+    requirement that cannot read the metadata it is there to read. That is the
+    exact defect `test_the_declared_build_requirement_can_read_this_metadata`
+    above was written for, one PEP later.
+
+    Measured 2026-09-09, PyPI JSON API: 77.0.3 / 78.1.1 / 80.9.0 all declare
+    Requires-Python >=3.9, so the raised floor is satisfiable on every
+    interpreter this package supports. The current latest, 84.0.0, declares
+    >=3.10 -- which does NOT conflict, because pip resolves `setuptools>=77` on
+    3.9 to the newest release still admitting 3.9. Recorded because "the newest
+    setuptools" and "the setuptools a 3.9 build uses" have stopped being the
+    same thing, and the next person to reason about this floor will assume they
+    are.
+    """
+    text = PYPROJECT.read_text()
+    spdx = re.search(r'^license\s*=\s*"([^"]+)"\s*$', text, re.M)
+    table = re.search(r'^license\s*=\s*\{', text, re.M)
+
+    assert not table, (
+        "pyproject still uses the deprecated `license = {text = ...}` table "
+        "form; setuptools has announced its removal for 2027-02-18"
+    )
+    assert spdx, (
+        "no PEP 639 SPDX license expression found in pyproject.toml; a "
+        "distribution that declares no license is not the same as one that "
+        "declares MIT"
+    )
+
+    floors = [int(m.group(1)) for m in
+              (re.search(r">=\s*(\d+)", r) for r in _build_requires()
+               if r.lower().startswith("setuptools")) if m]
+    assert floors, "no setuptools lower bound to check the license form against"
+    assert min(floors) >= 77, (
+        f"pyproject declares the PEP 639 form `license = \"{spdx.group(1)}\"` "
+        f"but only requires setuptools>={min(floors)}. Support for a bare SPDX "
+        f"expression landed in 77.0.0; below it the field is not understood."
+    )

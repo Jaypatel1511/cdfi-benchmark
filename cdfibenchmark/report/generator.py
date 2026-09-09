@@ -1,9 +1,11 @@
 """
 Generate CDFI peer benchmarking reports.
 """
+import datetime
+
 import pandas as pd
 from cdfibenchmark.data.schema import (
-    InstitutionProfile, BenchmarkResult, BENCHMARKS, _is_missing,
+    InstitutionProfile, BenchmarkResult, BENCHMARKS, benchmark_for, _is_missing,
     BASIS_FDIC, GRADEABLE_BASES, BASIS_REJECTED_IMPLAUSIBLE,
     asset_bucket_bounds_text,
 )
@@ -62,6 +64,91 @@ _COMPUTED_LABELS = {
 #: Decimal places every percentage on the report is rendered at (`_fmt_pct`).
 _PCT_DP = 2
 
+#: Decimal places the RELATIVE gap is rendered at. One is deliberate: the
+#: relative figure is a ratio of two already-rounded numbers, and rendering it
+#: to 2 dp would claim a precision its operands do not carry.
+_REL_DP = 1
+
+
+def _fmt_pp(value) -> str:
+    """Render a difference of two percentages as PERCENTAGE POINTS.
+
+    THIS IS NOT `_fmt_pct`, AND THAT IS THE WHOLE POINT. `_fmt_pct` appends a
+    `%`; the difference of two percentages is measured in percentage POINTS,
+    and the two are not the same quantity. Rendering 1.17% - 0.32% as "0.85%"
+    is the same class of defect as rendering a dollar figure as a percent
+    (cdfi-loan-pricing, inflated 100x) or a ratio as basis points
+    (cdfi-stress-tester). The portfolio's unit discriminator -- dollars scale
+    with the amount, rates do not -- states its own limit: "it cannot separate
+    PERCENT from RATIO." This is that unresolved case, so the separation is
+    made here, in the type of the formatter, rather than left to a reader.
+    """
+    if _is_missing(value):
+        return "N/A"
+    return f"{value:.2f} pp"
+
+
+def _relative_gap(vs_printed, peer_median_printed):
+    """The gap as a SHARE of the peer median, in percent, or None.
+
+    None when the peer median is not a positive number. A percentage of a
+    negative median reads as its own opposite: FDIC really publishes negative
+    EEFFR (their own arithmetic over negative noninterest expense), and against
+    a peer median of -700% an institution at 74.84% is 774.84 pp ABOVE while
+    774.84 / -700 = -110.7% would render "110.7% below" on the same line. A
+    zero median makes it undefined outright. Both are withheld, with the reason
+    stated on the face, rather than rendered as a number that is not one.
+
+    Computed from the PRINTED operands, like `_printed_vs_median`, so a reader
+    can reproduce it from the two lines directly above it.
+    """
+    if _is_missing(vs_printed) or _is_missing(peer_median_printed):
+        return None
+    if peer_median_printed <= 0:
+        return None
+    return vs_printed / peer_median_printed * 100.0
+
+
+def _vs_median_line(vs_printed, peer_median_printed) -> str:
+    """The comparison sentence, with the unit of every number on its face.
+
+    Measured on the 0.3.1 artifact (CERT 34352 @ 20260630), the old line was
+    sometimes near the relative figure and sometimes an order of magnitude from
+    it, with nothing distinguishing the cases:
+
+        metric  inst    median   said              actually
+        LTD     95.25%  85.19%   "10.06% above"    11.8% above   (close)
+        ROAA     0.32%   1.17%    "0.85% below"    72.6% below   (85x out)
+
+    A banker reading "ROAA 0.85% below median" concludes a near-miss; the bank
+    earns less than a third of its peer group's ROAA. Both figures are now
+    rendered, each with its unit, so the line cannot be read as the other one.
+
+    Direction is stated as a fact ("above"/"below"), never as better or worse:
+    whether above is good depends on `lower_is_better`, and that is what
+    `Status` answers. A second, differently-derived verdict on the same line
+    could contradict it.
+    """
+    # A tie is neither above nor below. `"above" if vs_printed > 0 else "below"`
+    # called it a shortfall -- and it is reachable well short of exact equality,
+    # because both operands are rounded to `_PCT_DP` before subtracting. A bank
+    # genuinely ABOVE its peer median by less than half a basis point printed
+    # "0.00% below median", which is a directional falsehood, not a rounding
+    # artefact.
+    if vs_printed == 0:
+        return ("**vs Peer Median:** 0.00 pp — at the median "
+                f"(both figures round to the same value at {_PCT_DP} dp)")
+
+    direction = "above" if vs_printed > 0 else "below"
+    head = f"**vs Peer Median:** {_fmt_pp(abs(vs_printed))} {direction} median"
+
+    relative = _relative_gap(vs_printed, peer_median_printed)
+    if relative is None:
+        return (f"{head} — relative gap not shown: the peer median is not "
+                f"positive, so a percentage of it would read as its own "
+                f"opposite")
+    return f"{head} ({abs(relative):.{_REL_DP}f}% {direction})"
+
 
 def _printed_vs_median(result):
     """The vs-median difference AS PRINTED, computed from the printed operands.
@@ -89,13 +176,18 @@ def _metric_label(metric: str, basis: str = None) -> str:
     return METRIC_LABELS.get(metric, metric)
 
 
-def _threshold_line(metric: str) -> str:
-    """The 'Benchmark:' line, carrying its own provenance.
+def _threshold_line(metric: str, report_date: str = None) -> str:
+    """The 'Benchmark:' line, carrying its own provenance AND its own period.
 
     A house rule of thumb rendered in the same column as a CFR citation reads
-    as a standard. Every line now says which it is.
+    as a standard. Every line says which it is.
+
+    And a citation carrying an effective date must state which period it is the
+    threshold FOR. This line resolves through the same `benchmark_for` the
+    grade does, so the band shown and the band graded against are the same one
+    by construction rather than by two call sites agreeing.
     """
-    benchmark = BENCHMARKS.get(metric, {})
+    benchmark = benchmark_for(metric, report_date)
     good = benchmark.get("good")
     warning = benchmark.get("warning")
     floor = benchmark.get("floor")
@@ -105,7 +197,15 @@ def _threshold_line(metric: str) -> str:
         return None
 
     if floor is not None:
-        band = (f"Strong {floor}%-{good}% | Adequate up to {warning}% | "
+        # "Adequate up to {warning}%" spanned 0-95%, overlapping both the Strong
+        # band stated immediately before it and the Weak floor stated
+        # immediately after. It resolved only because the Weak clause names the
+        # below-floor case afterwards, so the reader had to let the third clause
+        # correct the second. The three clauses now partition the range and meet
+        # only at their shared bounds -- which is also what `status` implements:
+        # WEAK below floor, STRONG on [floor, good], ADEQUATE on (good, warning],
+        # WEAK above warning.
+        band = (f"Strong {floor}%-{good}% | Adequate {good}%-{warning}% | "
                 f"Weak below {floor}% (under-deployed) or above {warning}%")
     elif lower:
         band = f"Strong <= {good}% | Adequate <= {warning}%"
@@ -150,6 +250,77 @@ def _peer_period_line(peers) -> str:
     if len(dates) == 1:
         return f"**Peer Report Date:** {dates[0]}"
     return f"**Peer Report Date:** MIXED — {', '.join(dates)}"
+
+
+
+def _provenance_block(institution, peers) -> list:
+    """What produced this document, and when the data under it was pulled.
+
+    Every metric line on this page carries `Basis:` because this package cares
+    that a figure carries what it was computed from. The DOCUMENT did not carry
+    the same for itself: 115 lines destined for a credit memo, with nothing
+    saying which tool version rendered them or when the FDIC data was
+    retrieved. `Report Date:` is the CALL-REPORT PERIOD, and a reader had no
+    way to know that from the line.
+
+    The version is read from `cdfibenchmark.__version__` AT RENDER TIME, and
+    read from nowhere else. Not from pyproject.toml -- that is the DECLARED
+    version, which the running code may not be -- and never hand-typed: that is
+    exactly how setup.py came to ship `version="0.2.1"` through two further
+    releases. When there is no installed distribution to read, the sentinel
+    reaches the page WITH ITS REASON rather than being suppressed. Running from
+    a clone is precisely when a reader most needs to know that the version
+    cannot be established.
+    """
+    import cdfibenchmark
+
+    generated = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC")
+
+    version = cdfibenchmark.__version__
+    if version == cdfibenchmark.UNKNOWN_VERSION:
+        tool = (f"cdfi-benchmark {version} — running from a source tree with "
+                f"no installed distribution metadata, so the exact code "
+                f"version that produced this report cannot be established")
+    else:
+        tool = f"cdfi-benchmark {version}"
+
+    lines = [
+        "---",
+        "",
+        "## Provenance",
+        "",
+        f"**Tool:** {tool}",
+        f"**Report Generated:** {generated}",
+    ]
+
+    if institution.retrieved_at:
+        lines.append(f"**FDIC Data Retrieved:** {institution.retrieved_at}")
+    else:
+        lines.append(
+            "**FDIC Data Retrieved:** unknown — this institution profile was "
+            "not built from an FDIC API response, so no retrieval moment was "
+            "recorded"
+        )
+
+    stamps = sorted({p.retrieved_at for p in peers if p.retrieved_at})
+    if stamps:
+        span = stamps[0] if len(stamps) == 1 else f"{stamps[0]} – {stamps[-1]}"
+        lines.append(f"**Peer Data Retrieved:** {span}")
+    else:
+        lines.append(
+            "**Peer Data Retrieved:** unknown — no peer profile records a "
+            "retrieval moment"
+        )
+
+    lines += [
+        f"**Call Report Period:** {institution.report_date or 'N/A'} — the "
+        f"FDIC reporting period these figures describe. This is **not** the "
+        f"date the data was retrieved, and not the date this report was "
+        f"generated; both of those are stated above.",
+        "",
+    ]
+    return lines
 
 
 def generate_report(
@@ -250,15 +421,13 @@ def generate_report(
             lines.append(f"**Peer Median:** {_fmt_pct(result.peer_median)}")
         vs_printed = _printed_vs_median(result)
         if not _is_missing(vs_printed):
-            direction = "above" if vs_printed > 0 else "below"
-            lines.append(
-                f"**vs Peer Median:** {_fmt_pct(abs(vs_printed))} {direction} median"
-            )
+            lines.append(_vs_median_line(
+                vs_printed, round(result.peer_median, _PCT_DP)))
 
         if result.basis:
             lines.append(f"**Basis:** {result.basis}")
 
-        threshold = _threshold_line(result.metric)
+        threshold = _threshold_line(result.metric, result.report_date)
         if threshold:
             lines.append(threshold)
 
@@ -331,6 +500,8 @@ def generate_report(
     distinct_certs = len({p.cert for p in peers})
     lines.append(f"**Distinct Institutions:** {distinct_certs}")
     lines.append("")
+
+    lines += _provenance_block(institution, peers)
 
     return "\n".join(lines)
 

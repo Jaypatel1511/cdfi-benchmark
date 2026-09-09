@@ -7,6 +7,167 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > History prior to 0.2.0 predates this changelog and is not documented here.
 
+## [0.3.2] - 2026-09-09
+
+The eighth settle read of the rendered artifact, and the fifth defect family it
+found that every gate and every fresh audit missed. All four findings are on the
+face of the document; none of them changed a computed number.
+
+### Fixed
+
+- **BLOCKER — the peer comparison line reported percentage POINTS labelled as
+  PERCENT.** `**vs Peer Median:** {_fmt_pct(abs(vs_printed))} {direction}
+  median` rendered the arithmetic difference of two percentages and appended a
+  `%`. Measured on the 0.3.1 artifact (CERT 34352 @ 20260630), all 8 of 8 metric
+  blocks were affected, and the damage varied by an order of magnitude with
+  nothing on the line telling the reader which case they were in:
+
+  | metric | institution | peer median | 0.3.1 rendered | true relative gap |
+  |---|---|---|---|---|
+  | NIM | 2.67% | 3.70% | "1.03% below median" | 27.8% below |
+  | Efficiency | 74.84% | 61.11% | "13.73% above median" | 22.5% above |
+  | ROAA | 0.32% | 1.17% | "0.85% below median" | **72.6% below** |
+  | ROAE | 2.50% | 11.57% | "9.07% below median" | **78.4% below** |
+  | Tier 1 Leverage | 13.20% | 10.69% | "2.51% above median" | 23.5% above |
+  | Loans-to-Deposits | 95.25% | 85.19% | "10.06% above median" | 11.8% above |
+  | NPL | 0.98% | 0.57% | "0.41% above median" | 71.9% above |
+  | LLR Coverage | 96.74% | 185.33% | "88.59% below median" | 47.8% below |
+
+  Loans-to-deposits was nearly right (10.06 vs 11.8); ROAA was out by 85x. A
+  banker reading "ROAA 0.85% below median" concludes a near-miss — the bank
+  earns less than a third of its peer group's ROAA. The line now states both,
+  each with its unit: `0.85 pp below median (72.6% below)`. Both are computed
+  from the printed operands, so both are reproducible from the page.
+
+  Third appearance of this family, after cdfi-loan-pricing's dollars-as-percent
+  inflated 100x and cdfi-stress-tester's basis points. The portfolio's unit
+  discriminator — dollars scale with the amount, rates do not — carries the
+  stated limit "it cannot separate PERCENT from RATIO", and a percentage-point
+  difference labelled as a percent is exactly that unresolved case. The
+  separation is now made in the type of the formatter (`_fmt_pp`, not
+  `_fmt_pct`) rather than left to a reader.
+
+- **A value AT the printed median was described as below it.** Found while
+  fixing the above, and not previously reported: `"above" if vs_printed > 0 else
+  "below"` had no third branch. Reachable well short of exact equality, because
+  both operands are rounded to 2 dp before subtracting — a bank genuinely
+  *above* its peer median by less than half a basis point printed "0.00% below
+  median". It now reads `0.00 pp — at the median`.
+
+- **The relative gap is withheld when the peer median is not positive.** Also
+  found while fixing the above. FDIC publishes negative efficiency ratios (their
+  own arithmetic over negative noninterest expense); against a peer median of
+  −700%, an institution at 74.84% is 774.84 pp *above* while 774.84 / −700 =
+  −110.7% would render "110.7% below" — the two figures contradicting each other
+  on one line. The page now states the pp gap and says why the relative one is
+  absent.
+
+- **The Tier 1 benchmark cited a threshold effective the day AFTER the report
+  date.** `_CBLR` was a flat string — `"12 CFR 324.12 (CBLR qualifying, lowered
+  9%->8% eff. 2026-07-01)"` — with `good: 8` beside it, so a `20260630` report
+  was graded against a level its own prose dates to `2026-07-01`.
+
+  Derived from primary text 2026-09-09 before changing anything, because the
+  finding rested on the string's internal date logic and nothing more: eCFR
+  12 CFR 324.12(a)(1) reads "greater than 9 percent" at the 2026-06-30 snapshot
+  and "greater than 8 percent" at 2026-07-01; the section's source credit gains
+  "91 FR 22989, Apr. 29, 2026" at that same boundary; and Federal Register
+  document 2026-08298, *Regulatory Capital Rule: Community Bank Leverage Ratio
+  Framework*, 91 FR 22973, published 2026-04-29, states `effective_on
+  2026-07-01`. **The rule is real and the date is right — only the application
+  was wrong.**
+
+  The level is now selected for the institution's own report date
+  (`CBLR_LEVELS`, `benchmark_for`), and the rendered **Benchmark:** line states
+  which level graded the report and when the other takes effect. No grade moves
+  on the subject that surfaced it (13.20% is strong under either band); grades
+  move for any bank between 8% and 9% at a report date before 2026-07-01.
+
+  12 CFR 324.403(b)(1)(i)(D) was checked at the same two snapshots and reads
+  5.0% at both, so the PCA leg is period-invariant and is documented as such.
+
+- **The loans-to-deposits band prose overlapped itself.** `Strong 50%-80% |
+  Adequate up to 95% | Weak below 50% ... or above 95%` — "Adequate up to 95%"
+  spans 0–95%, overlapping both the Strong band before it and the Weak floor
+  after it, and resolving only because the third clause corrects the second. Now
+  `Adequate 80%-95%`, and a gate asserts that every band the prose states grades
+  the way the prose says it does.
+
+### Added
+
+- **A provenance block on the rendered report.** 115 lines destined for a credit
+  memo carried no tool version, no generation date and no retrieval date, and
+  `Report Date: 20260630` is the call-report PERIOD, not when the data was
+  pulled. Every metric line carries `Basis:` because this package cares that a
+  figure carries what it was computed from; the document did not extend that
+  rule to itself.
+
+  The block states the tool version (read from `cdfibenchmark.__version__` at
+  render time — never hand-typed, and never read from `pyproject.toml`, which is
+  the *declared* version rather than the running one), the generation timestamp,
+  the FDIC retrieval moments for the institution and the peer group, and the
+  call-report period explicitly marked as not being either of the other two.
+  When there is no installed distribution to read, `0.0.0+unknown` reaches the
+  page **with its reason** rather than being suppressed: running from a clone is
+  exactly when a reader most needs to know the version cannot be established.
+
+- `InstitutionProfile.retrieved_at`, recorded at parse time (the last per-row
+  point) and `None` on any hand-built or synthetic profile, because nothing was
+  retrieved and a timestamp would be a claim.
+
+- **A runnable derivation for the loans-to-deposits WEAK counts.** `weak_total`
+  / `weak_above_warning` / `weak_below_floor` were three hand-typed numbers
+  checked only against each other and against the prose quoting them; nothing
+  re-derived them, so all four surfaces could have agreed on a wrong number
+  indefinitely. The 50 peers' loans-to-deposits values are now pinned as data
+  (`LTD_PEER_VALUES`, retrieved 2026-09-09) and the three counts are *derived*
+  from grading them. Re-measured live against api.fdic.gov: 13 of 50 WEAK, 11
+  above the 95% warning, 2 below the 50% floor, median 85.19 grading ADEQUATE,
+  from a 763-bank window — **identical to the 2026-09-05 pin on every figure.**
+
+  A prior read called these underivable on the strength of a `grep` over
+  `cdfibenchmark/` that never opened the README, where README.md:146 states the
+  population. Recorded here rather than quietly dropped.
+
+### Changed
+
+- `license = {text = "MIT"}` → `license = "MIT"` (PEP 639 SPDX expression). The
+  table form is deprecated with removal announced for 2027-02-18. The
+  `[build-system]` setuptools floor rises 61 → 77 to match, since 77.0.0 is the
+  first release that reads a bare SPDX expression, and a new gate holds the two
+  together so neither can move alone. Verified by building: the wheel's metadata
+  is `Metadata-Version: 2.4` / `License-Expression: MIT`.
+
+  Measured 2026-09-09 against the PyPI JSON API, because the 3.9 floor makes
+  this a real question: 77.0.3, 78.1.1 and 80.9.0 all declare Requires-Python
+  `>=3.9`, while the current latest, **84.0.0, declares `>=3.10`**. `>=77` is
+  still satisfiable on 3.9 — pip resolves it to the newest release still
+  admitting 3.9 — but "the newest setuptools" and "the setuptools a 3.9 build
+  uses" have stopped being the same thing, which is recorded so the next reader
+  does not assume they are.
+
+- The PCA citation is now the precise paragraph: `12 CFR 324.403(b)(1)` →
+  `12 CFR 324.403(b)(1)(i)(D)`, which is the subparagraph that actually states
+  the 5.0% leverage level, with the level rendered alongside it. `(b)(1)` was
+  true but named a block containing four different capital measures.
+
+- Two gates were narrowed to ask the question they mean rather than the cheap
+  one nearby, both exposed by this release's own additions:
+  `test_nan_cored_report_has_no_nan_substring` called the word "Prove**nan**ce"
+  a leaked NaN, and the new version-literal gate flagged a docstring that
+  *quotes* `version="0.2.1"` in order to record the defect it exists to prevent.
+  Both now judge structure — rendered value slots, and AST string constants that
+  are not docstrings — rather than raw file text. Same ruling `_CODE_SPAN`
+  reached for the cert scan.
+
+### Measured, unchanged
+
+- `_RATIO_MAX = 1000.0` re-swept 2026-09-09 over 46 quarters (2015Q1–2026Q2),
+  every filer: the maximum real `RBC1AAJ` is still **951.11** (ENTREBANK, CERT
+  59287, 20220331, $33,708k of assets), and the minimum is −6.20 (TRUST CO BANK,
+  CERT 9956, 20160331). The bound keeps ~4.9% headroom over the observed
+  maximum and is unchanged.
+
 ## [0.3.1] - 2026-09-07
 
 Packaging, release metadata and prose. **No library code changed.**

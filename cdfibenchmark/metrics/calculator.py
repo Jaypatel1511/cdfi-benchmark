@@ -4,7 +4,7 @@ Compute benchmarking metrics across a peer group.
 import pandas as pd
 import numpy as np
 from cdfibenchmark.data.schema import (
-    InstitutionProfile, BenchmarkResult, BENCHMARKS
+    InstitutionProfile, BenchmarkResult, BENCHMARKS, benchmark_for
 )
 
 
@@ -48,7 +48,12 @@ def benchmark_institution(
     peer_df = compute_peer_metrics(peers)
     results = []
 
-    for metric, config in BENCHMARKS.items():
+    for metric in BENCHMARKS:
+        # The threshold in force AT THE INSTITUTION'S OWN PERIOD. For the seven
+        # HOUSE entries this is BENCHMARKS[metric] unchanged; for tier1_ratio,
+        # the only entry citing a real instrument, it selects the CBLR band that
+        # actually applied at that report date.
+        config = benchmark_for(metric, institution.report_date)
         inst_value = institution.metrics_dict().get(metric)
 
         if metric in peer_df.columns:
@@ -75,6 +80,7 @@ def benchmark_institution(
             # layer so no cell can show a grade without showing its warrant.
             basis=institution.metric_basis(metric),
             source=config.get("source"),
+            report_date=institution.report_date,
         ))
 
     return results
@@ -102,7 +108,7 @@ def rank_institution(
     peer_df = compute_peer_metrics(peers)
     inst_value = institution.metrics_dict().get(metric)
 
-    config = BENCHMARKS.get(metric, {})
+    config = benchmark_for(metric, institution.report_date)
 
     # A missing (None) or unknown (NaN) metric can't be ranked — list.index on
     # NaN is meaningless. Treat it as not-available, like the absent case.

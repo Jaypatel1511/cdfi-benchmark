@@ -40,16 +40,44 @@
 #
 # `test_the_declared_build_requirement_can_read_this_metadata` in
 # tests/test_package_claims.py holds the floor at >= 61.
-requires = ["setuptools>=61", "wheel"]
+#
+# RAISED 61 -> 77 for PEP 639. `license = {text = "MIT"}` is the deprecated
+# table form (setuptools announced removal for 2027-02-18); the replacement is
+# a bare SPDX expression, `license = "MIT"`, and setuptools only learned to
+# read that in 77.0.0. The two must move together, which is what
+# `test_the_pep639_license_form_declares_the_floor_it_needs` holds.
+#
+# MEASURED 2026-09-09 against the PyPI JSON API, because the 3.9 floor makes
+# this a real question and not a formality:
+#
+#     setuptools 61.0.0  Requires-Python >=3.7
+#     setuptools 77.0.3  Requires-Python >=3.9
+#     setuptools 78.1.1  Requires-Python >=3.9
+#     setuptools 80.9.0  Requires-Python >=3.9
+#     setuptools 84.0.0  Requires-Python >=3.10   <-- the CURRENT latest
+#
+# So `>=77` is satisfiable on every interpreter this package declares: on 3.9
+# pip resolves it to the newest release whose Requires-Python still admits 3.9
+# (80.9.0 at time of writing), not to 84. The floor does NOT conflict with
+# requires-python = ">=3.9" -- but note that the newest setuptools already
+# excludes 3.9, so "the newest setuptools" and "the setuptools this builds
+# with" are no longer the same thing on the oldest supported interpreter.
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cdfi-benchmark"
-version = "0.3.1"
+version = "0.3.2"
 description = "CDFI and MDI peer benchmarking tool using FDIC call report data — NIM, efficiency ratio, ROAA, ROAE, Tier 1 leverage, and more"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+# PEP 639 SPDX expression, not the deprecated `{text = "MIT"}` table form.
+# No `license-files` key: this repository ships no LICENSE file, and naming one
+# that does not exist is a build error rather than a claim. That absence is
+# itself worth fixing -- an MIT declaration with no license text is a gap -- but
+# adding one means choosing a copyright holder and year, which is not a
+# renderer's call to make.
+license = "MIT"
 dependencies = [
     "pandas>=1.4.0",
     "numpy>=1.21.0",

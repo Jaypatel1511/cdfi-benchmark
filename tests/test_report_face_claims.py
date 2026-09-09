@@ -10,6 +10,7 @@ import pytest
 
 from cdfibenchmark.data.schema import (
     InstitutionProfile, ASSET_BUCKETS, HOUSE_ASSET_BUCKETS,
+    BENCHMARKS, BenchmarkResult,
 )
 from cdfibenchmark.peers.selector import PeerGroup, HOUSE_MAX_PEERS
 from cdfibenchmark.report.generator import (
@@ -104,10 +105,15 @@ def test_the_printed_vs_median_is_the_difference_of_the_printed_operands():
         r"^\| (.+?) \| (-?[\d.]+)% \| (-?[\d.]+)% \|", report, re.M)
     assert rows, "no rendered metric rows were parsed out of the report"
 
-    detail = {label: (amount, direction) for label, amount, direction in re.findall(
+    # The unit moved from `%` to `pp` in 0.3.2 (see the F1 block below); a tie
+    # renders "— at the median" rather than picking a direction. This gate is
+    # about the ARITHMETIC, so it reads whichever shape the line takes.
+    detail = {label: (amount, above or below or at)
+              for label, amount, above, below, at in re.findall(
         r"### (.+?)\n\n\*\*Institution Value:\*\* (?:-?[\d.]+)%\n"
         r"\*\*Peer Median:\*\* (?:-?[\d.]+)%\n"
-        r"\*\*vs Peer Median:\*\* (-?[\d.]+)% (above|below) median", report)}
+        r"\*\*vs Peer Median:\*\* (-?[\d.]+) pp "
+        r"(?:(above) median|(below) median|— (at) the median)", report)}
     assert detail, "no vs-median lines were parsed out of the report"
 
     checked = 0
@@ -116,7 +122,7 @@ def test_the_printed_vs_median_is_the_difference_of_the_printed_operands():
             continue
         printed, direction = detail[label]
         implied = round(float(inst_txt) - float(median_txt), 2)
-        signed = float(printed) * (1 if direction == "above" else -1)
+        signed = float(printed) * {"above": 1, "below": -1, "at": 0}[direction]
         assert signed == pytest.approx(implied, abs=1e-9), (
             f"{label}: the page prints {inst_txt}% and {median_txt}%, whose "
             f"difference is {implied:+.2f}, but states {signed:+.2f}"
@@ -351,3 +357,232 @@ def test_an_absent_subject_value_does_not_claim_it_was_refused():
     detail = detail[:detail.index("###", 5)]
     assert "**Not shown:**" not in detail
     assert "no value was reported" in detail
+
+
+# ── F1 (0.3.2): a difference of two percentages is PERCENTAGE POINTS ─────────
+#
+# `**vs Peer Median:** {_fmt_pct(abs(vs_printed))} {direction} median` rendered
+# the arithmetic difference of two percentages and appended a `%`. Measured on
+# the 0.3.1 artifact (CERT 34352 @ 20260630), all 8 of 8 metric blocks: the
+# sentence is sometimes near the relative figure and sometimes off by an order
+# of magnitude, WITH NOTHING ON THE LINE SAYING WHICH CASE THE READER IS IN.
+#
+#     metric      inst     median   rendered as            true relative gap
+#     NIM         2.67%    3.70%    "1.03% below median"    27.8% below
+#     ROAA        0.32%    1.17%    "0.85% below median"    72.6% below
+#     ROAE        2.50%   11.57%    "9.07% below median"    78.4% below
+#     LTD        95.25%   85.19%   "10.06% above median"    11.8% above
+#
+# A banker reading "ROAA 0.85% below median" concludes a near-miss. The bank
+# earns less than a third of its peer group's ROAA.
+#
+# Third appearance of this family, after cdfi-loan-pricing's dollars-as-percent
+# inflated 100x and cdfi-stress-tester's basis points. The portfolio's unit
+# discriminator -- dollars scale with the amount, rates do not -- carries the
+# stated limit "it cannot separate PERCENT from RATIO", and a percentage-point
+# difference labelled as a percent is exactly that unresolved case.
+#
+# GROUND TRUTH INDEPENDENT OF THE DECLARATION. Every expected number below is
+# typed as a literal, computed by hand from the two printed operands. A gate
+# that derived its expectation from the same formatter the renderer uses would
+# certify consistency, not truth.
+
+_VS_LINE = re.compile(
+    r"\*\*vs Peer Median:\*\* (-?[\d.]+) pp (above|below|at) (?:the )?median"
+    r"(?: \((-?[\d.]+)% (?:above|below)\))?"
+)
+
+
+def _roaa_specimen():
+    """inst ROAA 0.32%, peer median 1.17% -- the 0.3.1 artifact's own worst row.
+
+    By hand, from the two operands the page prints:
+        pp gap        0.32 - 1.17            = -0.85         -> "0.85 pp below"
+        relative gap  -0.85 / 1.17 * 100     = -72.649...%   -> "(72.6% below)"
+    The two differ by 85x. Nothing on the old line told the reader that.
+    """
+    subject = _bank(34352, 1_562_007.0, reported_roaa=0.324864010816794)
+    peers = _group([_bank(9000 + i, 1_562_000.0, reported_roaa=1.17)
+                    for i in range(20)], subject)
+    return generate_report(subject, peers)
+
+
+def _roaa_block(report):
+    start = report.index("### Return on Average Assets")
+    return report[start:report.index("\n###", start + 1)] \
+        if "\n###" in report[start + 1:] else report[start:]
+
+
+def test_the_vs_median_line_states_percentage_points_not_percent():
+    """The blocker. 0.85 is a percentage-POINT gap; the page called it 0.85%."""
+    block = _roaa_block(_roaa_specimen())
+    assert "0.85 pp below median" in block, (
+        f"the vs-median line does not state the gap in percentage points.\n"
+        f"Rendered block was:\n{block}"
+    )
+    assert "**vs Peer Median:** 0.85% below" not in block, (
+        "the pp difference is still rendered with a bare % sign"
+    )
+
+
+def test_the_vs_median_line_also_states_the_relative_gap():
+    """0.85 pp and 72.6% are both true and mean opposite things to a reader.
+
+    The binding requirement is that a reader can tell, FROM THE LINE ALONE,
+    what unit the number is in. Two labelled numbers do that; one unlabelled
+    one is what shipped.
+    """
+    block = _roaa_block(_roaa_specimen())
+    assert "(72.6% below)" in block, (
+        f"the vs-median line does not state the relative gap.\n"
+        f"Rendered block was:\n{block}"
+    )
+
+
+def test_the_pp_figure_and_the_relative_figure_are_different_numbers():
+    """The whole point of rendering both, on the row where it bites hardest.
+
+    Red-proving this is one edit: render the relative figure in the pp slot.
+    """
+    block = _roaa_block(_roaa_specimen())
+    m = _VS_LINE.search(block)
+    assert m, f"the vs-median line did not parse:\n{block}"
+    pp, relative = float(m.group(1)), float(m.group(3))
+    assert pp == 0.85, f"pp gap should be 0.85, page says {pp}"
+    assert relative == 72.6, f"relative gap should be 72.6, page says {relative}"
+    assert relative / pp > 10, (
+        f"on this specimen the two figures must diverge by more than 10x "
+        f"({relative} vs {pp}); if they do not, the specimen no longer "
+        f"exercises the defect this gate exists for"
+    )
+
+
+def test_every_metric_block_renders_both_figures():
+    """Not one row. All of them -- the defect was 8 of 8."""
+    report = _roaa_specimen()
+    blocks = re.findall(r"\*\*vs Peer Median:\*\* .*", report)
+    assert len(blocks) >= 5, f"only {len(blocks)} vs-median lines rendered"
+    for line in blocks:
+        assert " pp " in line, f"no percentage-point unit on: {line}"
+
+
+def test_a_value_at_the_printed_median_is_not_called_below_it():
+    """`"above" if vs_printed > 0 else "below"` called a tie a shortfall.
+
+    Reachable well short of exact equality: both operands are rounded to 2 dp
+    before subtracting, so a bank genuinely ABOVE its peer median by less than
+    half a basis point printed "0.00% below median" -- a directional falsehood.
+    """
+    subject = _bank(34352, 1_562_007.0, reported_nim=3.7012)
+    peers = _group([_bank(9000 + i, 1_562_000.0, reported_nim=3.70)
+                    for i in range(20)], subject)
+    report = generate_report(subject, peers)
+    nim = report[report.index("### Net Interest Margin"):]
+    nim = nim[:nim.index("\n###")] if "\n###" in nim else nim
+
+    assert "0.00 pp below median" not in nim, (
+        "a value at the printed median is still described as below it"
+    )
+    assert "at the median" in nim, (
+        f"a tie should say so in words. Rendered block was:\n{nim}"
+    )
+
+
+def test_the_relative_gap_is_withheld_when_the_peer_median_is_not_positive():
+    """A percentage OF a negative number reads as its own opposite.
+
+    FDIC really publishes negative EEFFR -- it is their own arithmetic over
+    negative noninterest expense. With a peer median of -700%, an institution
+    at 74.84% is 774.84 pp ABOVE the median, while 774.84 / -700 = -110.7%
+    would render "110.7% below". The pp figure and the relative figure would
+    contradict each other on the same line. Withhold it and say why.
+    """
+    subject = _bank(58490, 2_027_009.0, reported_efficiency_ratio=74.84)
+    peers = _group([_bank(9000 + i, 2_000_000.0,
+                          reported_efficiency_ratio=-700.0)
+                    for i in range(20)], subject)
+    report = generate_report(subject, peers)
+    eff = report[report.index("### Efficiency Ratio"):]
+    eff = eff[:eff.index("\n###")] if "\n###" in eff else eff
+
+    assert "774.84 pp above median" in eff, (
+        f"the percentage-point gap must still be stated:\n{eff}"
+    )
+    assert "110.7" not in eff, (
+        "a relative gap was computed against a non-positive peer median, "
+        "which renders 'below' for a value that is above"
+    )
+    assert "peer median is not positive" in eff, (
+        f"the line must say WHY the relative gap is absent:\n{eff}"
+    )
+
+
+# ── F5 (0.3.2): the banded threshold prose overlaps itself ───────────────────
+#
+# The rendered Benchmark line for loans-to-deposits read:
+#
+#   Strong 50%-80% | Adequate up to 95% | Weak below 50% (under-deployed) or
+#   above 95%
+#
+# "Adequate up to 95%" spans 0-95%, which overlaps BOTH the Strong band and the
+# Weak floor. It resolves only because Weak names the below-50 case afterwards,
+# so a reader has to hold three clauses at once and let the third correct the
+# second. Cosmetic next to F1 -- but it is a threshold line in a graded report,
+# and the code grades ADEQUATE only on (80, 95].
+def _ltd_band_line():
+    subject = _bank(34352, 1_562_007.0)
+    peers = _group([_bank(9000 + i, 1_562_000.0) for i in range(20)], subject)
+    report = generate_report(subject, peers)
+    block = report[report.index("### Loans-to-Deposits"):]
+    block = block[:block.index("\n###")] if "\n###" in block else block
+    line = next(l for l in block.splitlines() if l.startswith("**Benchmark:**"))
+    return line
+
+
+def test_the_banded_prose_does_not_span_the_bands_beside_it():
+    line = _ltd_band_line()
+    assert "Adequate up to 95%" not in line, (
+        f"the Adequate clause still spans 0-95%, overlapping Strong and the "
+        f"Weak floor:\n{line}"
+    )
+    assert "Adequate 80%-95%" in line, f"the Adequate band is not stated:\n{line}"
+
+
+def test_every_band_the_prose_states_grades_the_way_the_prose_says():
+    """Ground truth from the grader, not from the sentence describing it.
+
+    Red-proving this is one edit: widen either stated bound by a point.
+    """
+    line = _ltd_band_line()
+    strong = re.search(r"Strong (\d+)%-(\d+)%", line)
+    adequate = re.search(r"Adequate (\d+)%-(\d+)%", line)
+    weak = re.search(r"Weak below (\d+)% \(under-deployed\) or above (\d+)%", line)
+    assert strong and adequate and weak, f"the band line did not parse:\n{line}"
+
+    s_lo, s_hi = int(strong.group(1)), int(strong.group(2))
+    a_lo, a_hi = int(adequate.group(1)), int(adequate.group(2))
+    w_lo, w_hi = int(weak.group(1)), int(weak.group(2))
+
+    # The three clauses must partition the line, meeting only at shared bounds.
+    assert s_hi == a_lo, f"Strong ends at {s_hi} but Adequate starts at {a_lo}"
+    assert a_hi == w_hi, f"Adequate ends at {a_hi} but Weak starts above {w_hi}"
+    assert s_lo == w_lo, f"Strong starts at {s_lo} but Weak is below {w_lo}"
+
+    cfg = BENCHMARKS["loans_to_deposits"]
+
+    def grade(value):
+        return BenchmarkResult(
+            metric="loans_to_deposits", institution_value=value,
+            peer_median=None, peer_25th=None, peer_75th=None, peer_count=0,
+            lower_is_better=cfg.get("lower_is_better", False),
+        ).status
+
+    # Interiors, not just endpoints: an endpoint-only check passes on a band
+    # that is stated backwards.
+    assert grade((s_lo + s_hi) / 2) == "STRONG", "the stated Strong interior is not STRONG"
+    assert grade((a_lo + a_hi) / 2) == "ADEQUATE", "the stated Adequate interior is not ADEQUATE"
+    assert grade(w_lo - 0.01) == "WEAK", "below the stated floor is not WEAK"
+    assert grade(w_hi + 0.01) == "WEAK", "above the stated ceiling is not WEAK"
+    # And the bounds themselves fall where the prose puts them.
+    assert grade(s_lo) == "STRONG" and grade(s_hi) == "STRONG"
+    assert grade(a_hi) == "ADEQUATE"
