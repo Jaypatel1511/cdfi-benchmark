@@ -21,12 +21,19 @@ from cdfibenchmark.report.generator import (
     generate_report, summary_table,
 )
 
+#: What `__version__` becomes when there is no installed distribution to read.
+#: Named, rather than re-typed at each site that has to recognise it: the
+#: rendered report must state this honestly rather than suppress it, and a
+#: second hand-typed copy of the sentinel is how the two would drift apart.
+UNKNOWN_VERSION = "0.0.0+unknown"
+
 try:
     __version__ = version("cdfi-benchmark")
 except PackageNotFoundError:
-    __version__ = "0.0.0+unknown"
+    __version__ = UNKNOWN_VERSION
 
 __all__ = [
+    "UNKNOWN_VERSION",
     "CDFIBenchmarkError", "FDICAPIError", "FDICResponseError",
     "InstitutionProfile", "BenchmarkResult",
     "get_institution", "get_financials",

@@ -1,3 +1,5 @@
+import re
+
 import pytest
 import pandas as pd
 from cdfibenchmark.report.generator import (
@@ -55,7 +57,17 @@ def _summary_rows(report):
 def test_nan_cored_report_has_no_nan_substring(nan_cored_institution, sample_peers):
     """A NaN-cored institution must never leak 'nan'/'$nanMM' into the report."""
     report = generate_report(nan_cored_institution, sample_peers)
-    assert "nan" not in report.lower()
+    # The question is whether a NaN reached a rendered VALUE slot -- "$nanMM",
+    # "nan%", "nan pp" -- not whether the letters n-a-n occur on the page. A
+    # bare substring scan called the word "Provenance" a NaN leak. A leaked NaN
+    # is always preceded by a non-letter (a "$", a space, a line start) because
+    # it comes out of a format specifier; every English word containing the
+    # sequence has a letter in front of it.
+    leak = re.search(r"(?<![A-Za-z])nan", report, re.IGNORECASE)
+    assert leak is None, (
+        f"a NaN reached the rendered page at offset {leak.start() if leak else 0}: "
+        f"{report[max(0, (leak.start() if leak else 0) - 60):(leak.start() if leak else 0) + 40]!r}"
+    )
 
 
 def test_nan_cored_value_cell_renders_na_consistent_with_status(

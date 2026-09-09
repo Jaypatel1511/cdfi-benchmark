@@ -133,8 +133,114 @@ HOUSE_NPL_WARNING = 3.0
 HOUSE_RESERVE_COVERAGE_GOOD = 100
 HOUSE_RESERVE_COVERAGE_WARNING = 50
 
-_CBLR = "12 CFR 324.12 (CBLR qualifying, lowered 9%->8% eff. 2026-07-01)"
-_PCA = "12 CFR 324.403(b)(1) (PCA well-capitalized leverage minimum)"
+# The CBLR qualifying leverage level, BY THE PERIOD IT IS IN FORCE FOR.
+#
+# This was one flat string: "12 CFR 324.12 (CBLR qualifying, lowered 9%->8%
+# eff. 2026-07-01)", with `good: 8` beside it. So the tool graded a 20260630
+# report against a level its own prose dates to the day AFTER that period. No
+# grade moved on the subject that surfaced it (13.20% is strong under either
+# band); it moves for any bank between 8% and 9% at a report date before
+# 2026-07-01, which is an ordinary case.
+#
+# tier1_ratio is the ONLY cited entry here (see the note above). Every other
+# threshold is HOUSE, and a house rule of thumb has no effective date to get
+# wrong. Period-awareness is therefore not a general mechanism this module
+# needs everywhere -- it is needed exactly where a real instrument is cited.
+#
+# DERIVED FROM PRIMARY TEXT 2026-09-09, not from the string it replaces:
+#   * eCFR 12 CFR 324.12(a)(1) @ 2026-06-30 -> "greater than 9 percent"
+#   * eCFR 12 CFR 324.12(a)(1) @ 2026-07-01 -> "greater than 8 percent"
+#     (and (a)(2)(i), the qualifying criterion, moves with it)
+#   * the section's source credit gains "91 FR 22989, Apr. 29, 2026" at that
+#     same boundary and not before it
+#   * Federal Register doc 2026-08298, "Regulatory Capital Rule: Community
+#     Bank Leverage Ratio Framework", 91 FR 22973, published 2026-04-29,
+#     effective_on 2026-07-01
+#
+# The rule is real and the date is right. Only the application was wrong.
+#
+#: (first REPDTE the level applies to, level, the rule that set it), oldest
+#: first. A date-string comparison is correct here because REPDTE is
+#: zero-padded YYYYMMDD, which sorts lexicographically.
+CBLR_LEVELS = (
+    ("00000000", 9, "84 FR 61802, Nov. 13, 2019"),
+    ("20260701", 8, "91 FR 22973, Apr. 29, 2026"),
+)
+
+#: The PCA well-capitalized leverage minimum. Verified period-INVARIANT across
+#: the same window: 12 CFR 324.403(b)(1)(i)(D) reads "5.0 percent or greater"
+#: at both the 2026-06-30 and 2026-09-04 eCFR snapshots, and the section's
+#: source credit is unchanged between them. So this leg needs no resolution,
+#: and saying that explicitly is what stops the next reader from assuming the
+#: whole citation moved.
+_PCA_LEVEL = 5
+_PCA = ("12 CFR 324.403(b)(1)(i)(D) (PCA well-capitalized leverage "
+        "minimum, 5.0%)")
+
+
+def _cblr_at(report_date):
+    """The CBLR qualifying level in force at `report_date`, and how to cite it.
+
+    Returns ``(level, citation)``. `report_date` is a REPDTE string.
+    """
+    if report_date is None:
+        # A level carrying an effective date cannot be checked against no date.
+        # Fall back to current law -- but SAY that is what happened, rather than
+        # letting an unknown period silently pick a band. In practice REPDTE is
+        # always present on an FDIC-parsed profile; this path is for a
+        # hand-built one.
+        eff, level, rule = CBLR_LEVELS[-1]
+        return level, (
+            f"12 CFR 324.12 (CBLR qualifying level {level:g}%, eff. "
+            f"{_iso(eff)}, {rule} — applied because this report carries no "
+            f"period, so the level in force could not be determined)"
+        )
+
+    report_date = str(report_date)
+    chosen = CBLR_LEVELS[0]
+    for entry in CBLR_LEVELS:
+        if report_date >= entry[0]:
+            chosen = entry
+    eff, level, rule = chosen
+
+    later = [e for e in CBLR_LEVELS if e[0] > eff]
+    if later:
+        nxt_eff, nxt_level, nxt_rule = later[0]
+        return level, (
+            f"12 CFR 324.12 (CBLR qualifying level {level:g}% — the level in "
+            f"force at this report date; {nxt_level:g}% eff. "
+            f"{_iso(nxt_eff)}, {nxt_rule})"
+        )
+    earlier = [e for e in CBLR_LEVELS if e[0] < eff]
+    if earlier:
+        prv_level = earlier[-1][1]
+        return level, (
+            f"12 CFR 324.12 (CBLR qualifying level {level:g}% — eff. "
+            f"{_iso(eff)}, {rule}; {prv_level:g}% for report dates before it)"
+        )
+    return level, f"12 CFR 324.12 (CBLR qualifying level {level:g}%, {rule})"
+
+
+def _iso(repdte: str) -> str:
+    """YYYYMMDD -> YYYY-MM-DD, the form the Federal Register states dates in."""
+    return f"{repdte[0:4]}-{repdte[4:6]}-{repdte[6:8]}"
+
+
+def benchmark_for(metric: str, report_date: str = None) -> dict:
+    """`BENCHMARKS[metric]`, resolved to the band in force at `report_date`.
+
+    Every HOUSE entry is returned unchanged and IS the same object: a rule of
+    thumb has no effective date, so there is nothing to resolve. Only
+    tier1_ratio, the one entry citing a real instrument, varies by period.
+
+    This is the single place that answers "which threshold applies", so a grade
+    and the Benchmark line rendered beside it cannot disagree about it.
+    """
+    config = BENCHMARKS.get(metric, {})
+    if metric != "tier1_ratio":
+        return config
+    level, cblr = _cblr_at(report_date)
+    return {**config, "good": level, "source": f"{cblr}; {_PCA}"}
 
 
 # ── Benchmark Thresholds ──────────────────────────────────────────────────────
@@ -156,11 +262,18 @@ BENCHMARKS = {
         "unit": "%", "source": "HOUSE",
     },
     # The ONLY cited entry. tier1_ratio grades the Tier 1 LEVERAGE ratio
-    # (RBC1AAJ): STRONG >= 8 = CBLR qualifying level; ADEQUATE >= 5 = PCA
+    # (RBC1AAJ): STRONG >= the CBLR qualifying level; ADEQUATE >= 5 = PCA
     # well-capitalized leverage; WEAK < 5.
+    #
+    # `good` here is CURRENT LAW. It is not what grades: `benchmark_for` above
+    # resolves it to the level in force at the institution's own report date,
+    # and both `BenchmarkResult.status` and the rendered Benchmark line go
+    # through that resolver. This entry is the default a caller reading
+    # BENCHMARKS directly gets, and the two must not drift -- see
+    # `test_the_benchmarks_default_is_the_current_cblr_level`.
     "tier1_ratio": {
-        "good": 8, "warning": 5,
-        "unit": "%", "source": f"{_CBLR}; {_PCA}",
+        "good": CBLR_LEVELS[-1][1], "warning": _PCA_LEVEL,
+        "unit": "%", "source": f"{_cblr_at(None)[1]}; {_PCA}",
     },
     # Banded: WEAK below `floor` (under-deployed) as well as above `warning`
     # (funding strain). See the HOUSE_LTD_* block above.
@@ -359,6 +472,16 @@ class InstitutionProfile:
     #: what keeps "we refused it" from reading as "FDIC never published it".
     #: Empty on any hand-built profile.
     implausible_fields: tuple = ()
+
+    #: When this profile's row was read off the FDIC wire, as
+    #: "YYYY-MM-DD HH:MM:SS UTC". None on a hand-built or synthetic profile,
+    #: because nothing was retrieved and a timestamp would be a claim.
+    #:
+    #: `report_date` is the CALL-REPORT PERIOD and is not this. A reader of the
+    #: rendered artifact had no way to tell those apart, which is the whole
+    #: reason this field exists: the package already knows a retrieval date
+    #: matters enough to pin one in `LTD_CALIBRATION`.
+    retrieved_at: Optional[str] = None
 
     @property
     def total_assets_mm(self) -> float:
@@ -651,6 +774,12 @@ class BenchmarkResult:
     basis: Optional[str] = None
     #: Where this metric's threshold comes from: "HOUSE" or a citation.
     source: Optional[str] = None
+    #: The institution's own REPDTE. A threshold carrying an effective date must
+    #: be selected FOR a period, not applied to every period -- 0.3.1 graded a
+    #: 20260630 report against a CBLR level effective 2026-07-01. Kept on the
+    #: result rather than looked up at render time so the grade and the rendered
+    #: Benchmark line cannot resolve to different bands.
+    report_date: Optional[str] = None
 
     @property
     def vs_median(self) -> Optional[float]:
@@ -668,7 +797,7 @@ class BenchmarkResult:
         # number: institution_value is still returned in full.
         if self.basis is not None and self.basis not in GRADEABLE_BASES:
             return "N/A"
-        benchmark = BENCHMARKS.get(self.metric, {})
+        benchmark = benchmark_for(self.metric, self.report_date)
         good = benchmark.get("good")
         warning = benchmark.get("warning")
         lower = benchmark.get("lower_is_better", False)

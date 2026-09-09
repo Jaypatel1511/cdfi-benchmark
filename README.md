@@ -112,7 +112,7 @@ grades NIM `N/A`. That is the intended behaviour, not a bug; see
 | Efficiency Ratio | FDIC `EEFFR` | <= 60% | **HOUSE** |
 | ROAA | FDIC `ROA` | >= 1.0% | **HOUSE** |
 | ROAE | FDIC `ROE` | >= 10% | **HOUSE** |
-| Tier 1 Leverage Ratio | FDIC `RBC1AAJ` | >= 8% | 12 CFR 324.12 / 324.403 |
+| Tier 1 Leverage Ratio | FDIC `RBC1AAJ` | >= 9% before 2026-07-01, >= 8% from it | 12 CFR 324.12 / 324.403 |
 | Loans-to-Deposits | `LNLSNET` / `DEP` | 50%–80% (band) | **HOUSE** |
 | NPL Ratio | `NCLNLS` / `LNLSGR` | <= 1.0% | **HOUSE** |
 | Reserve Coverage | `LNATRES` / `NCLNLS` | >= 100% | **HOUSE** |
@@ -125,6 +125,41 @@ reported alongside it and answer a different question. A metric can grade STRONG
 while sitting below the peer median, and ADEQUATE while sitting entirely outside
 the peer range — both happen on real banks at `20260630`. The rendered report
 carries the same sentence beside the table.
+
+### Comparisons to the peer median are stated in BOTH units
+
+A metric's distance from its peer median is reported twice on the same line,
+because the two numbers mean different things and one alone is misleading:
+
+    **vs Peer Median:** 0.85 pp below median (72.6% below)
+
+`0.85 pp` is the arithmetic difference of the two percentages printed directly
+above it — percentage POINTS. `72.6%` is that gap as a share of the peer
+median. Through 0.3.1 only the first was rendered, and it carried a `%` sign:
+a bank earning less than a third of its peer group's ROAA read as "0.85% below
+median", which a reader reasonably takes for a near-miss. Both figures are
+computed from the printed operands, so both can be reproduced from the page.
+
+The relative figure is withheld, with the reason stated inline, whenever the
+peer median is not positive **at the precision the page prints** — and the
+reason given is the one true of that case, not a single sentence covering all
+three:
+
+* **negative median** — a percentage of it carries the opposite sign to the
+  direction stated beside it, so the same line would say "above" and "below" at
+  once. FDIC really does publish negative efficiency ratios and negative ROE.
+* **zero median** — the ratio is *undefined*. There is no sign to invert, and
+  saying there is one is a false statement about the peer group.
+* **a median that only rounds to zero** — it *is* positive; a gap relative to
+  0.0024% simply is not informative. The line says the median rounds to zero at
+  the printed precision rather than claiming it is not positive.
+
+If the relative figure itself rounds to `0.0%`, it is reported as rounding to
+zero rather than dressed as a direction: a magnitude of zero never carries an
+`above` or `below`.
+
+`above`/`below` is a statement of fact and never of merit; whether above is
+good depends on the metric, and that is what **Status** answers.
 
 ### Threshold provenance
 
@@ -187,10 +222,22 @@ A value that is reported but not graded shows its measurement and an explicit
 ---
 
 The **Tier 1 Leverage Ratio** thresholds follow bank-capital regulation, not an
-arbitrary target: Strong `>= 8%` is the Community Bank Leverage Ratio (CBLR)
-qualifying level (12 CFR 324.12, lowered from 9% effective 2026-07-01) and
-Adequate `>= 5%` is the leverage-ratio minimum for "well capitalized" under
-Prompt Corrective Action (12 CFR 324.403).
+arbitrary target: Strong is the Community Bank Leverage Ratio (CBLR) qualifying
+level (12 CFR 324.12) and Adequate `>= 5%` is the leverage-ratio minimum for
+"well capitalized" under Prompt Corrective Action (12 CFR 324.403(b)(1)(i)(D)).
+
+**The CBLR level is selected for the institution's own report date, not applied
+to every period.** It was lowered from 9% to 8% effective 2026-07-01 (91 FR
+22973, published 2026-04-29), so a bank filing at `20260630` is graded against
+9% and one filing at `20260930` against 8%. Through 0.3.1 both were graded
+against 8% — a threshold applied to a period one day before it existed. The
+rendered **Benchmark:** line states which level graded the report and when the
+other one takes effect, so the two are never ambiguous on the page. The PCA leg
+is period-invariant across this window: 12 CFR 324.403(b)(1)(i)(D) reads 5.0%
+at both the 2026-06-30 and 2026-09-04 eCFR snapshots.
+
+This is the only threshold in the package with an effective date, because it is
+the only one citing a real instrument. A HOUSE rule of thumb has none.
 
 ---
 

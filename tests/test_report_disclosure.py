@@ -220,3 +220,185 @@ def test_summary_table_carries_basis_and_source(q1_institution):
     df = summary_table(q1_institution, peers)
     assert "basis" in df.columns
     assert "threshold_source" in df.columns
+
+
+# ── F3 (0.3.2): the document carries no context about ITSELF ─────────────────
+#
+# 115 lines destined for a credit memo, and nothing said which tool version
+# produced them or when the FDIC data was pulled. `Report Date: 20260630` is the
+# CALL-REPORT PERIOD, not a retrieval date, and a reader has no way to know that
+# from the line.
+#
+# Every metric line carries `Basis:` because this package cares that a figure
+# carries what it was computed from. The document did not extend that rule to
+# itself. Sharpened by `LTD_CALIBRATION` pinning `retrieved: 2026-09-05` -- the
+# package already knows retrieval date matters enough to pin it in a test.
+import re as _re
+import pathlib as _pathlib
+
+import cdfibenchmark
+from cdfibenchmark.report import generator as _generator
+
+
+def _provenance(report):
+    assert "## Provenance" in report, (
+        f"the report renders no provenance block at all:\n{report[-600:]}"
+    )
+    return report[report.index("## Provenance"):]
+
+
+def test_the_report_states_the_version_of_the_tool_that_produced_it():
+    rows = [_peer(c) for c in range(1, 21)]
+    report = generate_report(_peer(57543, repdte="20260630"), rows)
+    block = _provenance(report)
+    assert cdfibenchmark.__version__ in block, (
+        f"the provenance block does not state {cdfibenchmark.__version__!r}, "
+        f"which is what `cdfibenchmark.__version__` is at render time:\n{block}"
+    )
+
+
+def test_an_undeterminable_version_is_rendered_honestly_not_suppressed():
+    """Running from a clone is exactly when a reader most needs to know.
+
+    `__version__` falls back to "0.0.0+unknown" when no installed distribution
+    metadata exists. That must reach the page, with the reason, rather than
+    being hidden or replaced by a number read out of pyproject.toml -- which
+    would make the artifact claim a version the running code may not be.
+    """
+    with patch.object(cdfibenchmark, "__version__", "0.0.0+unknown"):
+        rows = [_peer(c) for c in range(1, 21)]
+        report = generate_report(_peer(57543, repdte="20260630"), rows)
+    block = _provenance(report)
+    assert "0.0.0+unknown" in block, (
+        f"an undeterminable version was suppressed rather than stated:\n{block}"
+    )
+    assert "no installed distribution metadata" in block, (
+        f"the page states 0.0.0+unknown without saying what it means:\n{block}"
+    )
+
+
+def test_the_version_is_read_at_render_time_not_frozen_at_import():
+    """A module-level snapshot would be right today and wrong after an upgrade."""
+    rows = [_peer(c) for c in range(1, 21)]
+    with patch.object(cdfibenchmark, "__version__", "9.9.9-probe"):
+        report = generate_report(_peer(57543, repdte="20260630"), rows)
+    assert "9.9.9-probe" in _provenance(report), (
+        "the rendered version did not follow cdfibenchmark.__version__"
+    )
+
+
+def _code_strings(module):
+    """Every string constant in `module` that is not a docstring.
+
+    A regex over the file text cannot draw this distinction, and the
+    distinction is the whole gate: the docstring below deliberately QUOTES
+    `version="0.2.1"` in order to record the defect this gate exists to
+    prevent, and a scan that cannot tell a quotation from an assertion forces
+    the documentation out. The same ruling `_CODE_SPAN` reached for the cert
+    scan in test_package_claims.py, made structurally here rather than by
+    pattern.
+    """
+    import ast
+
+    tree = ast.parse(_pathlib.Path(module.__file__).read_text())
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docstrings.add(id(body[0].value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in docstrings]
+
+
+def test_no_version_string_is_hand_typed_in_the_renderer():
+    """One declared version. A second site that no gate reads goes stale.
+
+    This is the defect `setup.py` was emptied for in 0.3.1: it carried
+    `version="0.2.1"` while two further releases shipped to PyPI, and no gate
+    read it. The sentinel for an undeterminable version is likewise named once,
+    as `cdfibenchmark.UNKNOWN_VERSION`, rather than re-typed here.
+    """
+    literals = [v for v in _code_strings(_generator)
+                if _re.search(r"\d+\.\d+\.\d+", v)]
+    assert not literals, (
+        f"the renderer hand-types version-shaped literals {literals}; the "
+        f"version must come from cdfibenchmark.__version__ alone"
+    )
+    # Also structural, and for the same reason: the docstring above explains
+    # WHY the renderer must not read pyproject.toml, and a raw-text scan for
+    # the word cannot tell that explanation from the act.
+    reads_toml = [v for v in _code_strings(_generator) if "pyproject" in v]
+    assert not reads_toml, (
+        f"the renderer names pyproject.toml in code ({reads_toml}) — that is "
+        f"the DECLARED version, not the version of the code actually running"
+    )
+    import ast as _ast
+
+    imported = set()
+    for node in _ast.walk(_ast.parse(
+            _pathlib.Path(_generator.__file__).read_text())):
+        if isinstance(node, _ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert not {"tomllib", "tomli"} & imported, (
+        f"the renderer imports a TOML parser ({sorted(imported)}); the only "
+        f"version it may state is the one the running code reports"
+    )
+
+
+def test_the_report_states_when_it_was_generated():
+    rows = [_peer(c) for c in range(1, 21)]
+    block = _provenance(generate_report(_peer(57543, repdte="20260630"), rows))
+    assert _re.search(r"\*\*Report Generated:\*\* \d{4}-\d{2}-\d{2} "
+                      r"\d{2}:\d{2}:\d{2} UTC", block), (
+        f"no generation timestamp on the page:\n{block}"
+    )
+
+
+def test_the_report_separates_the_call_report_period_from_the_retrieval_date():
+    """`Report Date: 20260630` is a period. It is not when the data was pulled."""
+    rows = [_peer(c) for c in range(1, 21)]
+    block = _provenance(generate_report(_peer(57543, repdte="20260630"), rows))
+    assert "20260630" in block, "the provenance block does not name the period"
+    assert "not the date" in block or "not when" in block, (
+        f"the block does not tell the reader the period is not a retrieval "
+        f"date:\n{block}"
+    )
+
+
+def test_a_hand_built_profile_says_the_retrieval_date_is_unknown():
+    """Nothing was retrieved, so nothing may be claimed about when."""
+    rows = [_peer(c) for c in range(1, 21)]
+    block = _provenance(generate_report(_peer(57543, repdte="20260630"), rows))
+    assert _re.search(r"\*\*FDIC Data Retrieved:\*\* .*(unknown|not recorded)",
+                      block), (
+        f"a profile that was never retrieved claims a retrieval date:\n{block}"
+    )
+
+
+def test_a_parsed_profile_carries_the_moment_it_was_retrieved():
+    """The parse layer is the only place that knows when the wire was read."""
+    from cdfibenchmark.data.fdic import _parse_institution
+    row = {
+        "CERT": 34352, "NAME": "CITY FIRST BANK NA", "CITY": "Washington",
+        "STALP": "DC", "REPDTE": "20260630",
+        "ASSET": 1562007, "DEP": 1182800, "LNLSNET": 1126539,
+        "NETINC": 2345, "INTINC": 34011, "EINTEXP": 15521,
+        "NONII": 1541, "NONIX": 15143, "EQ": 120000,
+    }
+    profile = _parse_institution(row)
+    assert profile.retrieved_at, "a parsed profile records no retrieval moment"
+    assert _re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC",
+                         profile.retrieved_at), (
+        f"retrieved_at is not a UTC timestamp: {profile.retrieved_at!r}"
+    )
+    report = generate_report(profile, [_peer(c) for c in range(1, 21)])
+    assert profile.retrieved_at in _provenance(report), (
+        "the recorded retrieval moment does not reach the page"
+    )

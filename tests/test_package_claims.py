@@ -698,10 +698,165 @@ def test_the_declared_build_requirement_can_read_this_metadata():
 @layout.needs("pyproject.toml")
 def test_version_is_bumped_for_a_release_that_changes_grades():
     meta = _project_meta()
-    assert meta["version"] == "0.3.1"
+    assert meta["version"] == "0.3.2"
 
 
 @layout.needs("CHANGELOG.md")
 def test_changelog_documents_the_current_version():
     text = layout.SURFACES["CHANGELOG.md"].read_text()
-    assert "## [0.3.1]" in text
+    assert "## [0.3.2]" in text
+
+
+@layout.needs("pyproject.toml", "LICENSE")
+def test_the_declared_license_file_exists_and_names_a_holder_and_a_year():
+    """0.3.2 declared MIT and shipped no license text. 0.3.3 ships it.
+
+    The comment in pyproject.toml used to say, correctly, that naming a
+    `license-files` target that does not exist is a BUILD ERROR rather than a
+    claim -- so this gate is not decoration: if LICENSE is deleted and the key
+    stays, `python -m build` stops. What the gate adds is the other direction,
+    which the build cannot check: that the file is the license it says it is,
+    and that it names somebody.
+
+    A single year, not a range: the first PyPI upload of cdfi-benchmark was
+    2026-05-07, so there is no earlier year to span from.
+    """
+    text = layout.SURFACES["LICENSE"].read_text()
+
+    assert "MIT License" in text, (
+        'LICENSE does not carry the MIT header, but pyproject declares '
+        '`license = "MIT"`. The declaration and the text must agree.'
+    )
+    holder = re.search(r"^Copyright \(c\) (\d{4})(?:-(\d{4}))? (.+)$",
+                       text, re.M)
+    assert holder, (
+        "LICENSE carries no parseable `Copyright (c) <year> <holder>` line. An "
+        "MIT license with no copyright holder grants nothing on behalf of "
+        "nobody."
+    )
+    assert holder.group(3).strip(), "the copyright line names no holder"
+    assert not holder.group(2), (
+        f"LICENSE states a year RANGE {holder.group(1)}-{holder.group(2)}. "
+        f"First PyPI upload was 2026-05-07, so a single year is correct and a "
+        f"range claims authorship in a year this package did not exist."
+    )
+    for clause in ("Permission is hereby granted",
+                   "WITHOUT WARRANTY OF ANY KIND"):
+        assert clause in text, (
+            f"LICENSE is missing the MIT clause {clause!r}; a truncated "
+            f"license is not the license the metadata names"
+        )
+
+
+@layout.needs("pyproject.toml")
+def test_the_license_is_declared_as_an_expression_not_a_classifier():
+    """PEP 639 makes these MUTUALLY EXCLUSIVE, and the build enforces it.
+
+    A distribution declaring both `License-Expression` and a legacy
+    `License ::` trove classifier is invalid under PEP 639, and setuptools>=77
+    -- the floor this project already declares -- RAISES on it. So the
+    classifier a reader might reasonably reach for while "completing" the
+    metadata would not produce a mislabelled wheel; it would stop the build.
+
+    Verified on the built artifact 2026-09-09 (python3.14, `python -m build`):
+    the wheel's METADATA carries `Metadata-Version: 2.4`,
+    `License-Expression: MIT`, `License-File: LICENSE`, and NO
+    `Classifier: License ::` line.
+
+    And the "would stop the build" half is MEASURED, not reasoned. Adding the
+    classifier to this pyproject and rebuilding, same date and interpreter:
+
+        setuptools.errors.InvalidConfigError: License classifiers have been
+        superseded by license expressions (see
+        https://peps.python.org/pep-0639/). Please remove:
+        ERROR Backend subprocess exited when trying to invoke
+        get_requires_for_build_wheel
+
+    -- exit 1, no wheel produced.
+    """
+    text = PYPROJECT.read_text()
+    assert re.search(r'^license\s*=\s*"[^"]+"\s*$', text, re.M), (
+        "no PEP 639 SPDX expression, so the mutual exclusion this gate holds "
+        "does not apply and something else has changed"
+    )
+    offenders = [m.group(0).strip() for m in
+                 re.finditer(r'^\s*"License :: [^"]*",?\s*$', text, re.M)]
+    assert not offenders, (
+        f"pyproject declares a PEP 639 `License-Expression` AND "
+        f"{len(offenders)} legacy trove classifier(s): {offenders}. They are "
+        f"mutually exclusive under PEP 639 and setuptools>=77 raises on a "
+        f"distribution carrying both -- this would not mislabel the wheel, it "
+        f"would stop the build."
+    )
+
+
+@layout.needs("pyproject.toml", "MANIFEST.in", "LICENSE")
+def test_the_license_is_declared_for_both_distributions():
+    """LICENSE must reach the wheel AND the sdist, and be named by both files.
+
+    setuptools>=77 ships a `license-files` target into both on its own; the
+    MANIFEST.in line is belt-and-braces for the sdist if that key ever moves.
+    Verified on the built artifacts 2026-09-09: `LICENSE` appears as
+    `cdfi_benchmark-0.3.2.dist-info/licenses/LICENSE` in the wheel and as
+    `cdfi_benchmark-0.3.2/LICENSE` in the tarball.
+    """
+    project = PYPROJECT.read_text()
+    key = re.search(r'^license-files\s*=\s*\[([^\]]*)\]', project, re.M)
+    assert key, (
+        "pyproject declares no `license-files` key, so nothing tells the "
+        "backend to ship LICENSE into the wheel"
+    )
+    assert "LICENSE" in key.group(1), (
+        f"`license-files` does not name LICENSE: {key.group(1)!r}"
+    )
+    manifest = layout.SURFACES["MANIFEST.in"].read_text()
+    assert re.search(r'^include LICENSE\s*$', manifest, re.M), (
+        "MANIFEST.in does not `include LICENSE`, so the sdist depends "
+        "entirely on the backend honouring `license-files`"
+    )
+
+
+@layout.needs("pyproject.toml")
+def test_the_pep639_license_form_declares_the_floor_it_needs():
+    """The SPDX license expression and the setuptools floor must move together.
+
+    `license = {text = "MIT"}` is the deprecated table form; setuptools has
+    announced its removal for 2027-02-18. The replacement is a bare SPDX
+    expression, `license = "MIT"`, which setuptools only learned to read in
+    77.0.0 -- so switching the form without raising the floor declares a build
+    requirement that cannot read the metadata it is there to read. That is the
+    exact defect `test_the_declared_build_requirement_can_read_this_metadata`
+    above was written for, one PEP later.
+
+    Measured 2026-09-09, PyPI JSON API: 77.0.3 / 78.1.1 / 80.9.0 all declare
+    Requires-Python >=3.9, so the raised floor is satisfiable on every
+    interpreter this package supports. The current latest, 84.0.0, declares
+    >=3.10 -- which does NOT conflict, because pip resolves `setuptools>=77` on
+    3.9 to the newest release still admitting 3.9. Recorded because "the newest
+    setuptools" and "the setuptools a 3.9 build uses" have stopped being the
+    same thing, and the next person to reason about this floor will assume they
+    are.
+    """
+    text = PYPROJECT.read_text()
+    spdx = re.search(r'^license\s*=\s*"([^"]+)"\s*$', text, re.M)
+    table = re.search(r'^license\s*=\s*\{', text, re.M)
+
+    assert not table, (
+        "pyproject still uses the deprecated `license = {text = ...}` table "
+        "form; setuptools has announced its removal for 2027-02-18"
+    )
+    assert spdx, (
+        "no PEP 639 SPDX license expression found in pyproject.toml; a "
+        "distribution that declares no license is not the same as one that "
+        "declares MIT"
+    )
+
+    floors = [int(m.group(1)) for m in
+              (re.search(r">=\s*(\d+)", r) for r in _build_requires()
+               if r.lower().startswith("setuptools")) if m]
+    assert floors, "no setuptools lower bound to check the license form against"
+    assert min(floors) >= 77, (
+        f"pyproject declares the PEP 639 form `license = \"{spdx.group(1)}\"` "
+        f"but only requires setuptools>={min(floors)}. Support for a bare SPDX "
+        f"expression landed in 77.0.0; below it the field is not understood."
+    )
