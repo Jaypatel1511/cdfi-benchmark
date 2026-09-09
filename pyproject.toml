@@ -85,7 +85,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Jaypatel1511/cdfi-benchmark"
+Homepage = "https://jaypatel1511.github.io/cdfi-superpowers/"
+Repository = "https://github.com/Jaypatel1511/cdfi-benchmark"
+Documentation = "https://github.com/Jaypatel1511/cdfi-benchmark#readme"
+Issues = "https://github.com/Jaypatel1511/cdfi-benchmark/issues"
+Changelog = "https://github.com/Jaypatel1511/cdfi-benchmark/blob/main/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 # Test the INSTALLED package, not the repo-root source tree. The default import
