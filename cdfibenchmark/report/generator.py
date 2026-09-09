@@ -91,25 +91,71 @@ def _fmt_pp(value) -> str:
 def _relative_gap(vs_printed, peer_median_printed):
     """The gap as a SHARE of the peer median, in percent, or None.
 
-    None when the peer median is not a positive number. A percentage of a
-    negative median reads as its own opposite: FDIC really publishes negative
-    EEFFR (their own arithmetic over negative noninterest expense), and against
-    a peer median of -700% an institution at 74.84% is 774.84 pp ABOVE while
-    774.84 / -700 = -110.7% would render "110.7% below" on the same line. A
-    zero median makes it undefined outright. Both are withheld, with the reason
-    stated on the face, rather than rendered as a number that is not one.
+    None when the peer median is not POSITIVE AT THE PRINTED PRECISION. THREE
+    different situations put it there and they are not the same statement, so
+    the reason is chosen per-case by `_relative_gap_reason` rather than written
+    once here. Through 0.3.2 one sentence served all three and was false for
+    two of them; see that function for the measured population of each.
+
+    PRECONDITION: both operands are present -- neither None nor NaN. This is
+    NOT re-checked here, and the two `_is_missing` guards that used to do so
+    are gone rather than kept as decoration. `generate_report` is the only
+    caller in the package (and `_vs_median_line` its only route in): it derives
+    `vs_printed` from `_printed_vs_median`, which returns None when
+    `peer_median` is absent and NaN when `institution_value` is, and it renders
+    nothing at all unless `not _is_missing(vs_printed)`. So neither operand can
+    arrive missing. Held by
+    `test_a_missing_operand_cannot_reach_the_relative_gap_at_all`.
 
     Computed from the PRINTED operands, like `_printed_vs_median`, so a reader
     can reproduce it from the two lines directly above it.
     """
-    if _is_missing(vs_printed) or _is_missing(peer_median_printed):
-        return None
     if peer_median_printed <= 0:
         return None
     return vs_printed / peer_median_printed * 100.0
 
 
-def _vs_median_line(vs_printed, peer_median_printed) -> str:
+def _relative_gap_reason(peer_median_raw) -> str:
+    """Why the relative gap is withheld, in the words true of THIS case.
+
+    Through 0.3.2 ONE sentence served every case -- "the peer median is not
+    positive, so a percentage of it would read as its own opposite" -- and it
+    is true of exactly one of the three. A zero median has no sign to invert,
+    and a median that merely ROUNDS to zero is positive, so the page told the
+    reader it was not.
+
+    Swept live against api.fdic.gov over six quarters, every filer, using the
+    package's own peer selection. The per-quarter counts are pinned, with their
+    retrieval date, in `tests/test_report_face_claims.py::RELATIVE_GAP_REACH`
+    and gated against the CHANGELOG by `tests/test_changelog_claims.py`. At
+    20260630: the negative case fires 0 times, the zero case 3 times, the
+    rounds-to-zero case 0 times -- so the ONLY case live at the release period
+    was one the sentence was false for. Each case is live at some period in the
+    window, which is why all three get their own sentence rather than two.
+
+    Decided on the RAW median, not the printed one, and that is the whole point
+    of taking it: `round(0.0024, 2)` and `round(0.0, 2)` are both `0.0`, and
+    they are different facts about the peer group.
+    """
+    if peer_median_raw < 0:
+        # The one case the 0.3.2 sentence was right about. Against a peer
+        # median of -700%, an institution at 74.84% is 774.84 pp ABOVE while
+        # 774.84 / -700 = -110.7% renders "110.7% below" on the same line.
+        return ("the peer median is negative, so a percentage of it would "
+                "carry the opposite sign to the direction stated above")
+    if peer_median_raw == 0:
+        # Nothing to invert. The ratio simply does not exist.
+        return "the peer median is zero, so a gap relative to it is undefined"
+    # Positive, but smaller than half a unit in the last printed place. Saying
+    # "not positive" here is a statement about the number the page rounded
+    # away, not about the peer group.
+    return (f"the peer median is {peer_median_raw:.3g}% and rounds to "
+            f"{0.0:.{_PCT_DP}f}% at the {_PCT_DP} dp shown above, so a "
+            f"percentage of it would be a ratio to a quantity this page has "
+            f"already rounded away")
+
+
+def _vs_median_line(vs_printed, peer_median_raw) -> str:
     """The comparison sentence, with the unit of every number on its face.
 
     Measured on the 0.3.1 artifact (CERT 34352 @ 20260630), the old line was
@@ -142,12 +188,28 @@ def _vs_median_line(vs_printed, peer_median_printed) -> str:
     direction = "above" if vs_printed > 0 else "below"
     head = f"**vs Peer Median:** {_fmt_pp(abs(vs_printed))} {direction} median"
 
-    relative = _relative_gap(vs_printed, peer_median_printed)
+    relative = _relative_gap(vs_printed, round(peer_median_raw, _PCT_DP))
     if relative is None:
-        return (f"{head} — relative gap not shown: the peer median is not "
-                f"positive, so a percentage of it would read as its own "
-                f"opposite")
-    return f"{head} ({abs(relative):.{_REL_DP}f}% {direction})"
+        return (f"{head} — relative gap not shown: "
+                f"{_relative_gap_reason(peer_median_raw)}")
+
+    # A magnitude of ZERO must not carry a direction word. This is the very
+    # defect the `vs_printed == 0` branch above exists for, on the OTHER half
+    # of the same line -- and 0.3.2 introduced the relative figure without
+    # extending the rule to it. The two halves are rounded to different places
+    # (`_PCT_DP` and `_REL_DP`) from different quantities, so the relative
+    # figure reaches zero on its own: a 0.01 pp gap against a median of 87.19%
+    # is 0.0115%, and the line read "0.01 pp below median (0.0% below)" -- one
+    # half stating a gap, the other stating there is none, both saying "below".
+    #
+    # Measured live over the whole filer universe, every metric: 14 cells at
+    # 20260630, 15 at 20260331, 20 at 20251231, 13 at 20250331. Pinned in
+    # `tests/test_changelog_claims.py::ZERO_MAGNITUDE_REACH`.
+    rendered = f"{abs(relative):.{_REL_DP}f}"
+    if float(rendered) == 0:
+        return (f"{head} (relative gap rounds to {rendered}% of the peer "
+                f"median)")
+    return f"{head} ({rendered}% {direction})"
 
 
 def _printed_vs_median(result):
@@ -421,8 +483,11 @@ def generate_report(
             lines.append(f"**Peer Median:** {_fmt_pct(result.peer_median)}")
         vs_printed = _printed_vs_median(result)
         if not _is_missing(vs_printed):
-            lines.append(_vs_median_line(
-                vs_printed, round(result.peer_median, _PCT_DP)))
+            # The RAW median, not the rounded one: `_relative_gap_reason`
+            # cannot tell a zero median from one that rounds to zero without
+            # it, and those are different facts. The RATIO is still taken
+            # against the rounded value, inside `_vs_median_line`.
+            lines.append(_vs_median_line(vs_printed, result.peer_median))
 
         if result.basis:
             lines.append(f"**Basis:** {result.basis}")

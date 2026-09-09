@@ -488,32 +488,344 @@ def test_a_value_at_the_printed_median_is_not_called_below_it():
     )
 
 
-def test_the_relative_gap_is_withheld_when_the_peer_median_is_not_positive():
-    """A percentage OF a negative number reads as its own opposite.
+# ── F1 (0.3.3 BLOCKER): one reason sentence served three different cases ─────
+#
+# Through 0.3.2 the withheld-relative-gap line read, for every case:
+#
+#     "relative gap not shown: the peer median is not positive, so a
+#      percentage of it would read as its own opposite"
+#
+# That is TRUE of a negative median and FALSE of the other two. A zero median
+# has no sign to invert -- the ratio is undefined, not inverted. And a median
+# that merely ROUNDS to zero at the 2 dp the page prints IS positive, so the
+# sentence denied a fact about the peer group in order to explain a rounding
+# decision.
+#
+# Every count below was measured LIVE against api.fdic.gov on 2026-09-09 from
+# Jay's macOS shell, over the ENTIRE filer universe at each REPDTE (not a
+# sample), driving the package's own peer selection -- the +/-50% asset window,
+# `_nearest_by_assets`, HOUSE_MAX_PEERS -- and the package's own metric
+# properties. The replication was validated end-to-end against live
+# `build_peer_group` + `benchmark_institution` on CERTs 16583, 13986 and 29966
+# at 20260630: identical peer counts and identical medians on every metric.
+#
+# A cell is counted only where the renderer actually reaches the sentence: the
+# subject's own value is present, and the printed difference is non-zero (a tie
+# takes the "at the median" branch and never calls `_relative_gap`).
 
-    FDIC really publishes negative EEFFR -- it is their own arithmetic over
-    negative noninterest expense. With a peer median of -700%, an institution
-    at 74.84% is 774.84 pp ABOVE the median, while 774.84 / -700 = -110.7%
-    would render "110.7% below". The pp figure and the relative figure would
-    contradict each other on the same line. Withhold it and say why.
+#: (REPDTE, negative-median cells, zero-median cells, rounds-to-zero cells).
+#: Filer universe sizes: 4,313 / 4,353 / 4,411 / 4,452 / 4,494 / 4,536.
+RELATIVE_GAP_REACH = (
+    ("20260630", 0, 3, 0),
+    ("20260331", 10, 4, 0),
+    ("20251231", 0, 7, 0),
+    ("20250930", 0, 15, 0),
+    ("20250630", 0, 9, 0),
+    ("20250331", 0, 4, 7),
+)
+
+#: Retrieval date for RELATIVE_GAP_REACH and every specimen below.
+RELATIVE_GAP_REACH_RETRIEVED = "2026-09-09"
+
+
+def test_every_withheld_case_in_the_measured_population_is_live():
+    """No sentence is written for a case that never fires, and none is missing.
+
+    The point of splitting one sentence into three is that all three cases are
+    REAL. If a column here were all zeroes, that sentence would be decoration
+    and this gate says so.
     """
-    subject = _bank(58490, 2_027_009.0, reported_efficiency_ratio=74.84)
-    peers = _group([_bank(9000 + i, 2_000_000.0,
-                          reported_efficiency_ratio=-700.0)
-                    for i in range(20)], subject)
-    report = generate_report(subject, peers)
-    eff = report[report.index("### Efficiency Ratio"):]
-    eff = eff[:eff.index("\n###")] if "\n###" in eff else eff
+    for i, name in enumerate(("negative", "zero", "rounds-to-zero"), start=1):
+        total = sum(row[i] for row in RELATIVE_GAP_REACH)
+        assert total > 0, (
+            f"the {name} case is written for but was measured 0 times across "
+            f"{len(RELATIVE_GAP_REACH)} quarters -- either the sweep is wrong "
+            f"or the sentence serves nothing"
+        )
 
-    assert "774.84 pp above median" in eff, (
-        f"the percentage-point gap must still be stated:\n{eff}"
+
+def test_the_release_period_is_dominated_by_the_case_the_old_sentence_got_wrong():
+    """Why this blocked a release rather than waiting for 0.3.3.
+
+    At 20260630 -- the period every worked example in the README and CHANGELOG
+    uses -- the case the 0.3.2 sentence was RIGHT about fires zero times, and
+    the case it was WRONG about fires three. The shipped sentence was false
+    every single time it rendered at the release period.
+    """
+    at_release = dict((row[0], row) for row in RELATIVE_GAP_REACH)["20260630"]
+    _, negative, zero, rounds_to_zero = at_release
+    assert negative == 0, (
+        f"the sweep says the negative case fires {negative} times at 20260630; "
+        f"this gate's premise was that it fires 0"
     )
-    assert "110.7" not in eff, (
-        "a relative gap was computed against a non-positive peer median, "
-        "which renders 'below' for a value that is above"
+    assert zero + rounds_to_zero > 0, (
+        "no false-sentence case fires at the release period, which would mean "
+        "the blocker was not reachable on shipped output"
     )
-    assert "peer median is not positive" in eff, (
-        f"the line must say WHY the relative gap is absent:\n{eff}"
+
+
+# ── One specimen per live case, driven through the real renderer ─────────────
+#
+# Each specimen's FDIC inputs are the values FDIC actually published for that
+# CERT at that REPDTE, so the median is DERIVED by the package from real data
+# rather than declared here. Rule (i): none of these gates asserts a rendered
+# string against a constant copied from the renderer -- they assert the
+# sentence BY ITS MEANING (which word must and must not appear, and which
+# arithmetic must not).
+
+
+def _npl_bank(cert, non_current, gross, **over):
+    """A peer whose npl_ratio comes from real NCLNLS / LNLSGR dollars."""
+    return _bank(cert, 9_316.0, non_current_loans=non_current,
+                 gross_loans=gross, **over)
+
+
+def _detail_block(report, heading):
+    block = report[report.index(heading):]
+    return block[:block.index("\n###")] if "\n###" in block else block
+
+
+#: CERT 16583 (STATE BANK OF BURRTON) @ 20260630 -- the live zero-median
+#: specimen. Its 19-bank peer group holds four banks with an NPL ratio at all;
+#: three report zero non-current loans, so the median is exactly 0.00%.
+#: (CERT, NCLNLS $k, LNLSGR $k) as FDIC published them.
+ZERO_MEDIAN_PEERS = (
+    (29966, 83.0, 6226.0),
+    (13986, 0.0, 2241.0),
+    (17982, 0.0, 3053.0),
+    (17138, 0.0, 9755.0),
+)
+#: CERT 16583's own NCLNLS / LNLSGR at that period -> 2.53%.
+ZERO_MEDIAN_SUBJECT = (16583, 173.0, 6834.0)
+
+#: CERT 9349 @ 20250331 -- the live ROUNDS-TO-ZERO specimen (finding D1). Its
+#: 44 valued peers have a median NPL ratio of 0.0024260067928190197%, which is
+#: genuinely POSITIVE and rounds to 0.00% at the 2 dp the page prints. It is
+#: set by CERT 10200's ONE thousand dollars of non-current loans against
+#: $20,610k of gross loans. Backed by 44 peers, not a thin group.
+ROUNDS_TO_ZERO_PEERS = (
+    (14344, 423.0, 21607.0), (29774, 163.0, 24877.0), (29627, 0.0, 32464.0),
+    (31409, 586.0, 35860.0), (6084, 0.0, 16146.0), (5196, 397.0, 16065.0),
+    (1675, 0.0, 17861.0), (10077, 4.0, 12881.0), (18463, 0.0, 19974.0),
+    (10843, 138.0, 16660.0), (15098, 0.0, 16844.0), (57363, 1446.0, 22684.0),
+    (13611, 0.0, 16035.0), (10200, 1.0, 20610.0), (9752, 0.0, 14065.0),
+    (31774, 94.0, 33355.0), (10463, 0.0, 29170.0), (23826, 0.0, 1365.0),
+    (30065, 364.0, 36945.0), (27716, 0.0, 30995.0), (5142, 321.0, 12760.0),
+    (4494, 0.0, 25073.0), (17450, 40.0, 30578.0), (13931, 397.0, 11012.0),
+    (14853, 0.0, 24755.0), (10704, 0.0, 8878.0), (29059, 274.0, 26872.0),
+    (59330, 0.0, 2985.0), (17551, 954.0, 14732.0), (15762, 434.0, 24194.0),
+    (27841, 0.0, 31530.0), (29582, 0.0, 12480.0), (17160, 9.0, 3638.0),
+    (18568, 0.0, 17519.0), (13582, 1290.0, 20569.0), (11731, 95.0, 23254.0),
+    (17174, 55.0, 19710.0), (6198, 0.0, 18305.0), (8323, 0.0, 23480.0),
+    (30176, 0.0, 35370.0), (9295, 0.0, 12555.0), (4122, 59.0, 16332.0),
+    (12745, 170.0, 29640.0), (15767, 0.0, 15915.0),
+)
+#: CERT 9349's own NCLNLS / LNLSGR at that period -> 0.167%.
+ROUNDS_TO_ZERO_SUBJECT = (9349, 39.0, 23320.0)
+
+#: CERT 34065 @ 20260331 -- the live NEGATIVE-median specimen. FDIC's published
+#: ROE for its four peers; the median is -0.50%. This is the one case the 0.3.2
+#: sentence was right about, kept as a real specimen rather than the synthetic
+#: -700% efficiency ratio the gate used before.
+NEGATIVE_MEDIAN_PEER_ROE = ((57834, -0.27), (28722, -201.12),
+                            (57150, -0.73), (34331, 3.14))
+#: CERT 34065's own published ROE at that period.
+NEGATIVE_MEDIAN_SUBJECT_ROE = (34065, 0.13)
+
+
+def _zero_median_report():
+    cert, ncl, gross = ZERO_MEDIAN_SUBJECT
+    subject = _npl_bank(cert, ncl, gross)
+    peers = _group([_npl_bank(c, n, g) for c, n, g in ZERO_MEDIAN_PEERS],
+                   subject)
+    return generate_report(subject, peers)
+
+
+def _rounds_to_zero_report():
+    cert, ncl, gross = ROUNDS_TO_ZERO_SUBJECT
+    subject = _npl_bank(cert, ncl, gross, report_date="20250331")
+    peers = _group([_npl_bank(c, n, g, report_date="20250331")
+                    for c, n, g in ROUNDS_TO_ZERO_PEERS],
+                   subject, target_report_date="20250331")
+    return generate_report(subject, peers)
+
+
+def _negative_median_report():
+    cert, roe = NEGATIVE_MEDIAN_SUBJECT_ROE
+    subject = _bank(cert, 9_316.0, reported_roae=roe, report_date="20260331")
+    peers = _group([_bank(c, 9_316.0, reported_roae=v, report_date="20260331")
+                    for c, v in NEGATIVE_MEDIAN_PEER_ROE],
+                   subject, target_report_date="20260331")
+    return generate_report(subject, peers)
+
+
+def test_a_zero_peer_median_says_the_ratio_is_undefined_not_that_a_sign_inverts():
+    """THE BLOCKER. Live on CERT 16583 @ 20260630, peer NPL median 0.00%.
+
+    A zero median has NO SIGN. Nothing about it can "read as its own opposite",
+    and telling a reader it does is a false statement about their peer group on
+    a page whose entire 0.3.2 round was convened to stop false statements.
+    """
+    npl = _detail_block(_zero_median_report(), "### Non-Performing Loan Ratio")
+
+    assert "0.00%" in npl, (
+        f"the specimen no longer produces a zero peer median:\n{npl}"
+    )
+    assert "undefined" in npl, (
+        f"the zero case must say the ratio is UNDEFINED:\n{npl}"
+    )
+    assert "opposite" not in npl, (
+        f"the page tells the reader a percentage of a ZERO median would read "
+        f"as its own opposite. Zero has no sign to invert:\n{npl}"
+    )
+    assert "not positive" not in npl, (
+        f"'not positive' is the collapsed sentence this gate exists to keep "
+        f"out of the zero case:\n{npl}"
+    )
+
+
+def test_a_negative_peer_median_does_say_the_sign_would_invert():
+    """The one case the old sentence was right about — it must KEEP its reason.
+
+    CERT 34065 @ 20260331: peers' published ROE median is -0.50% and the
+    subject is at 0.13%, which is 0.63 pp ABOVE. 0.63 / -0.50 = -126%, so a
+    relative figure would render "126.0% below" on the same line as "above".
+    """
+    roae = _detail_block(_negative_median_report(),
+                         "### Return on Average Equity (ROAE)")
+
+    assert "opposite" in roae, (
+        f"the negative case lost the reason that is true of it:\n{roae}"
+    )
+    assert "undefined" not in roae, (
+        f"a negative median is not undefined — it is invertible, which is a "
+        f"different objection:\n{roae}"
+    )
+    assert "126.0" not in roae and "126%" not in roae, (
+        f"a relative gap was computed against a negative peer median:\n{roae}"
+    )
+    assert " above median" in roae, (
+        f"the percentage-point gap and its direction must still be stated:\n"
+        f"{roae}"
+    )
+
+
+def test_a_median_that_only_rounds_to_zero_is_not_called_not_positive():
+    """D1. Live on CERT 9349 @ 20250331 — 7 cells that quarter.
+
+    The peer median NPL ratio is 0.0024260067928190197%, set by ONE peer's
+    single thousand dollars of non-current loans. It is positive. The page
+    rounds it to 0.00% for display and then, through 0.3.2, told the reader it
+    "is not positive" — a false statement about a 44-bank peer group, not a
+    thin one.
+
+    Withholding the relative figure here is right: a ratio against 0.0024% is
+    not informative. The REASON is what had to change.
+    """
+    npl = _detail_block(_rounds_to_zero_report(), "### Non-Performing Loan Ratio")
+
+    assert "not positive" not in npl, (
+        f"the page says a POSITIVE peer median is not positive:\n{npl}"
+    )
+    assert "opposite" not in npl, (
+        f"there is no sign to invert on a positive median:\n{npl}"
+    )
+    assert "undefined" not in npl, (
+        f"the ratio is defined here — it is merely uninformative:\n{npl}"
+    )
+    assert "rounds to" in npl, (
+        f"the rounds-to-zero case must say the median ROUNDS to zero at the "
+        f"printed precision:\n{npl}"
+    )
+
+
+def test_the_three_withheld_reasons_are_three_different_sentences():
+    """The defect in one line: one sentence cannot be true of three cases.
+
+    Collapsing the branches back to a single shared reason — the mutation this
+    gate is red-proved with — makes two of these three equal.
+    """
+    reasons = []
+    for report, heading in (
+        (_zero_median_report(), "### Non-Performing Loan Ratio"),
+        (_rounds_to_zero_report(), "### Non-Performing Loan Ratio"),
+        (_negative_median_report(), "### Return on Average Equity (ROAE)"),
+    ):
+        block = _detail_block(report, heading)
+        line = [ln for ln in block.splitlines()
+                if ln.startswith("**vs Peer Median:**")]
+        assert line, f"no vs-median line rendered:\n{block}"
+        assert "relative gap not shown" in line[0], (
+            f"this specimen no longer withholds the relative gap:\n{line[0]}"
+        )
+        reasons.append(line[0].split("relative gap not shown:", 1)[1].strip())
+
+    assert len(set(reasons)) == 3, (
+        f"three distinct cases produced {len(set(reasons))} distinct "
+        f"reasons:\n" + "\n".join(reasons)
+    )
+
+
+def test_a_missing_operand_cannot_reach_the_relative_gap_at_all():
+    """`_relative_gap`'s stated PRECONDITION, held rather than asserted.
+
+    Its two `_is_missing` guards were unreachable from the only caller, and an
+    unreachable branch is not a defect — but a REASON STRING serving a branch
+    that cannot fire is a comment pretending to be behaviour. The guards are
+    gone; this is what now holds the precondition.
+
+    `_printed_vs_median` is the only producer of `vs_printed`, and
+    `generate_report` renders nothing unless it is present.
+    """
+    subject = _bank(34352, 1_562_007.0)
+    for kwargs in ({"peer_median": None}, {"peer_median": float("nan")},
+                   {"institution_value": None},
+                   {"institution_value": float("nan")}):
+        base = dict(metric="npl_ratio", institution_value=1.0, peer_median=1.0,
+                    peer_25th=None, peer_75th=None, peer_count=1)
+        base.update(kwargs)
+        vs = _printed_vs_median(BenchmarkResult(**base))
+        assert vs is None or vs != vs, (
+            f"_printed_vs_median returned a usable {vs!r} for {kwargs}, so a "
+            f"missing operand CAN reach _relative_gap and its precondition is "
+            f"false"
+        )
+
+
+def test_a_relative_gap_that_rounds_to_zero_does_not_carry_a_direction_word():
+    """The unknown unknown of this round, and it is NEW IN 0.3.2.
+
+    0.3.2 fixed exactly this defect on the pp half of the line — a magnitude of
+    zero paired with a direction word — and introduced the relative half
+    without extending the rule to it. The two halves round to different places
+    (`_PCT_DP` and `_REL_DP`) from different quantities, so the relative figure
+    reaches zero on its own while the pp figure does not:
+
+        **vs Peer Median:** 0.01 pp below median (0.0% below)
+
+    One half states a gap; the other states there is none; both say "below".
+
+    Measured live over the whole filer universe, every metric: 14 cells at
+    20260630, 15 at 20260331, 20 at 20251231, 13 at 20250331.
+    """
+    subject = _bank(34352, 1_562_007.0, reported_efficiency_ratio=87.20)
+    peers = _group([_bank(9000 + i, 1_562_000.0,
+                          reported_efficiency_ratio=87.19)
+                    for i in range(20)], subject)
+    eff = _detail_block(generate_report(subject, peers),
+                        "### Efficiency Ratio")
+
+    assert "0.01 pp above median" in eff, (
+        f"the specimen no longer produces a 0.01 pp gap:\n{eff}"
+    )
+    for wrong in ("(0.0% above)", "(0.0% below)"):
+        assert wrong not in eff, (
+            f"the line states a relative magnitude of zero and a direction in "
+            f"the same breath: {wrong}\n{eff}"
+        )
+    assert "rounds to 0.0%" in eff, (
+        f"a relative gap that rounds away must say so rather than be dressed "
+        f"as a direction:\n{eff}"
     )
 
 

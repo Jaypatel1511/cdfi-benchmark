@@ -72,12 +72,22 @@ description = "CDFI and MDI peer benchmarking tool using FDIC call report data â
 readme = "README.md"
 requires-python = ">=3.9"
 # PEP 639 SPDX expression, not the deprecated `{text = "MIT"}` table form.
-# No `license-files` key: this repository ships no LICENSE file, and naming one
-# that does not exist is a build error rather than a claim. That absence is
-# itself worth fixing -- an MIT declaration with no license text is a gap -- but
-# adding one means choosing a copyright holder and year, which is not a
-# renderer's call to make.
+#
+# Through 0.3.2 there was no `license-files` key and no LICENSE file, and the
+# comment here said so: naming a file that does not exist is a build error
+# rather than a claim, and choosing a copyright holder and year was not a
+# renderer's call to make. That was the right refusal and it is now spent --
+# Jay supplied the missing input on 2026-09-09. A SINGLE YEAR, not a range:
+# the first PyPI upload of cdfi-benchmark was 2026-05-07, so there is no
+# earlier year to span from.
+#
+# PEP 639 makes `License-Expression` and the legacy `License ::` trove
+# classifiers MUTUALLY EXCLUSIVE -- setuptools>=77 raises on a distribution
+# declaring both. So there is deliberately no OSI classifier below, and
+# `test_the_license_is_declared_as_an_expression_not_a_classifier` holds that:
+# adding the classifier a reader might reach for would stop the build.
 license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "pandas>=1.4.0",
     "numpy>=1.21.0",

@@ -29,6 +29,10 @@
 recursive-include tests *.py
 
 include README.md
+# setuptools>=77 ships a `license-files` target in BOTH the wheel and the sdist
+# on its own; this is belt-and-braces, and it is what keeps LICENSE in the
+# tarball if that key ever moves. Held by the two license gates.
+include LICENSE
 include CHANGELOG.md
 include CONTRIBUTING.md
 include pyproject.toml

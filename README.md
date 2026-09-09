@@ -140,9 +140,23 @@ a bank earning less than a third of its peer group's ROAA read as "0.85% below
 median", which a reader reasonably takes for a near-miss. Both figures are
 computed from the printed operands, so both can be reproduced from the page.
 
-The relative figure is withheld, with the reason stated inline, when the peer
-median is not positive — a percentage of a negative median reads as its own
-opposite, and FDIC really does publish negative efficiency ratios.
+The relative figure is withheld, with the reason stated inline, whenever the
+peer median is not positive **at the precision the page prints** — and the
+reason given is the one true of that case, not a single sentence covering all
+three:
+
+* **negative median** — a percentage of it carries the opposite sign to the
+  direction stated beside it, so the same line would say "above" and "below" at
+  once. FDIC really does publish negative efficiency ratios and negative ROE.
+* **zero median** — the ratio is *undefined*. There is no sign to invert, and
+  saying there is one is a false statement about the peer group.
+* **a median that only rounds to zero** — it *is* positive; a gap relative to
+  0.0024% simply is not informative. The line says the median rounds to zero at
+  the printed precision rather than claiming it is not positive.
+
+If the relative figure itself rounds to `0.0%`, it is reported as rounding to
+zero rather than dressed as a direction: a magnitude of zero never carries an
+`above` or `below`.
 
 `above`/`below` is a statement of fact and never of merit; whether above is
 good depends on the metric, and that is what **Status** answers.

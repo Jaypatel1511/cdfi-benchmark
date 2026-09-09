@@ -187,6 +187,10 @@ SURFACES = {
     "CHANGELOG.md": ROOT / "CHANGELOG.md",
     "CONTRIBUTING.md": ROOT / "CONTRIBUTING.md",
     "pyproject.toml": ROOT / "pyproject.toml",
+    # Added 0.3.3. Listing it here makes it NEVER-EXCUSABLE by default (see
+    # EXCUSABLE_SURFACES below), which is the point: an MIT declaration whose
+    # license text has gone missing is exactly the state this release ended.
+    "LICENSE": ROOT / "LICENSE",
     "MANIFEST.in": ROOT / "MANIFEST.in",
     "setup.py": ROOT / "setup.py",
     "cdfibenchmark/": ROOT / "cdfibenchmark",
