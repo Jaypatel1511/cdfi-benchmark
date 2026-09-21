@@ -49,7 +49,11 @@ jobs:
   # 1. Build wheel + sdist once, upload as the single source of truth artifact.
   build:
     name: Build wheel and sdist
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -151,7 +155,11 @@ jobs:
   test-wheel:
     name: test wheel (py${{ matrix.python-version }})
     needs: [build]
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -238,7 +246,11 @@ jobs:
   test-sdist:
     name: test sdist (py${{ matrix.python-version }})
     needs: [build]
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
