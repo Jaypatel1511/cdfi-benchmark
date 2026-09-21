@@ -59,7 +59,11 @@ jobs:
   #    the tag (minus the leading 'v'). Parsed with tomllib, never sed/grep.
   verify-version:
     name: Verify pyproject version matches tag
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     outputs:
       # The tag version, emitted only after it has been proven equal to
       # pyproject's. artifact-layouts consumes this to assert what the installed
@@ -110,7 +114,11 @@ jobs:
   publish:
     name: Publish to PyPI (Trusted Publisher / OIDC)
     needs: [verify-version, artifact-layouts]
-    runs-on: ubuntu-latest
+    # Runner pinned, not `ubuntu-latest`: actions/python-versions ships NO Python
+    # 3.9 build for ubuntu-26.04, and the `ubuntu-latest` label moves to Ubuntu 26
+    # on 2026-10-19. Remove this pin once this repo's Python floor rises above 3.9
+    # and every version in every matrix here has an ubuntu-26.04 build.
+    runs-on: ubuntu-24.04
     environment: pypi
     # Overrides the top-level read-only default: the single elevated scope, here only.
     permissions:
