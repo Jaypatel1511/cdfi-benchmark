@@ -137,6 +137,13 @@ def test_the_whole_band_regrades_at_every_pre_effective_quarter(repdte):
     This is what makes the entry's headline claim a measurement rather than an
     assertion: the count is pinned, but that EVERY member of the band flips is
     derived from the package's own grader.
+
+    0.3.3 moves the part of this band that displays as 9.00 on to N/A. The
+    0.3.2 claim remains true history of 0.3.2. (0.3.3 withholds every value
+    that rounds to the level at the displayed precision -- here 8.999 and 9.0
+    -- because the report cannot show which side of the level they are on;
+    methodology v4.2 section 6. The pinned 2,244 count is unchanged: it
+    counted 0.3.2's movement.)
     """
     level, _ = _cblr_at(repdte)
     assert level == 9, (
@@ -144,7 +151,7 @@ def test_the_whole_band_regrades_at_every_pre_effective_quarter(repdte):
         f"{level}%; PRE_EFFECTIVE_QUARTERS and CBLR_LEVELS disagree"
     )
     # Walk the band, including both edges and the value just under the top.
-    for value in (8.0, 8.01, 8.5, 8.99, 8.999):
+    for value in (8.0, 8.01, 8.5, 8.99, 8.994):
         old = "STRONG" if value >= 8 else "ADEQUATE"
         new = _graded(value, repdte)
         assert old == "STRONG", "premise: 0.3.1 graded the whole band STRONG"
@@ -153,22 +160,50 @@ def test_the_whole_band_regrades_at_every_pre_effective_quarter(repdte):
             f"period-aware band; the entry claims the whole band moves "
             f"STRONG -> ADEQUATE"
         )
-    # And the band's exclusive upper edge must NOT move.
-    assert _graded(9.0, repdte) == "STRONG", (
-        f"9.0% at {repdte} must stay STRONG -- it is the qualifying level, so "
-        f"the band that moves is [8.0, 9.0) and the entry says so"
+    # 0.3.3: the part of the band that displays as the level itself is
+    # withheld, with the display-equality reason.
+    for value in (8.999, 9.0):
+        result = BenchmarkResult(
+            metric="tier1_ratio", institution_value=value, peer_median=None,
+            peer_25th=None, peer_75th=None, peer_count=0,
+            basis=BASIS_FDIC_LEVERAGE, report_date=repdte,
+        )
+        assert result.status == "N/A", (
+            f"{value}% at {repdte} displays as 9.00% but graded {result.status}"
+        )
+        assert result.not_graded_reason and "rounds to 9.00%" in (
+            result.not_graded_reason), result.not_graded_reason
+    # And the first displayed value above the level is STRONG.
+    assert _graded(9.01, repdte) == "STRONG", (
+        f"9.01% at {repdte} is greater than the 9% level and must be STRONG"
     )
 
 
 def test_no_grade_moves_once_the_lower_level_takes_effect():
-    """The other half of the claim, and the reason the band is bounded in time."""
+    """The other half of the claim, and the reason the band is bounded in time.
+
+    0.3.3: 20260930 is after LEVELS_VERIFIED_THROUGH (case (a), LVT
+    2026-09-22), so it is refused (BEYOND) rather than graded at 8%. In case
+    (b) (LVT >= 20260930) 8.5 and 8.99 grade STRONG and 8.0 is withheld as
+    display-equal to the level.
+    """
+    case_b = False   # pinned literally: 0.3.3 verified through 2026-09-22
     eff = CBLR_LEVELS[-1][0]
     assert eff == "20260701", f"CBLR effective date moved to {eff}"
     for value in (8.0, 8.5, 8.99):
-        assert _graded(value, "20260930") == "STRONG", (
-            "after the effective date the 8% level applies and the band no "
-            "longer re-grades; the entry's 'pre-effective' framing depends on it"
+        result = BenchmarkResult(
+            metric="tier1_ratio", institution_value=value, peer_median=None,
+            peer_25th=None, peer_75th=None, peer_count=0,
+            basis=BASIS_FDIC_LEVERAGE, report_date="20260930",
         )
+        if not case_b:                                   # case (a)
+            assert result.status == "N/A"
+            assert result.not_graded_reason.startswith(
+                "This version's CBLR schedule was verified against the CFR"), (
+                result.not_graded_reason)
+        else:                                            # case (b)
+            expected = "N/A" if value == 8.0 else "STRONG"
+            assert result.status == expected, (value, result.status)
 
 
 def test_the_pinned_sum_is_derived_from_the_pinned_quarters_not_typed():

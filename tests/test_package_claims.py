@@ -698,13 +698,22 @@ def test_the_declared_build_requirement_can_read_this_metadata():
 @layout.needs("pyproject.toml")
 def test_version_is_bumped_for_a_release_that_changes_grades():
     meta = _project_meta()
-    assert meta["version"] == "0.3.2"
+    assert meta["version"] == "0.3.3"
 
 
-@layout.needs("CHANGELOG.md")
+@layout.needs("pyproject.toml", "CHANGELOG.md")
 def test_changelog_documents_the_current_version():
+    """Reads the version from pyproject.toml, so it can fail.
+
+    It used to assert a typed "## [0.3.2]", which stayed green after the bump
+    to 0.3.3 even with no [0.3.3] entry at all.
+    """
+    version = _project_meta()["version"]
     text = layout.SURFACES["CHANGELOG.md"].read_text()
-    assert "## [0.3.2]" in text
+    assert f"## [{version}]" in text, (
+        f"pyproject.toml declares {version} but CHANGELOG.md has no "
+        f"'## [{version}]' entry"
+    )
 
 
 @layout.needs("pyproject.toml", "LICENSE")

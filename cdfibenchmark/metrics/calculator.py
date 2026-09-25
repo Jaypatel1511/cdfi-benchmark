@@ -52,7 +52,8 @@ def benchmark_institution(
         # The threshold in force AT THE INSTITUTION'S OWN PERIOD. For the seven
         # HOUSE entries this is BENCHMARKS[metric] unchanged; for tier1_ratio,
         # the only entry citing a real instrument, it selects the CBLR band that
-        # actually applied at that report date.
+        # actually applied at that report date, or refuses, with a reason --
+        # see `_cblr_at`.
         config = benchmark_for(metric, institution.report_date)
         inst_value = institution.metrics_dict().get(metric)
 

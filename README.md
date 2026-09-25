@@ -112,7 +112,7 @@ grades NIM `N/A`. That is the intended behaviour, not a bug; see
 | Efficiency Ratio | FDIC `EEFFR` | <= 60% | **HOUSE** |
 | ROAA | FDIC `ROA` | >= 1.0% | **HOUSE** |
 | ROAE | FDIC `ROE` | >= 10% | **HOUSE** |
-| Tier 1 Leverage Ratio | FDIC `RBC1AAJ` | >= 9% before 2026-07-01, >= 8% from it | 12 CFR 324.12 / 324.403 |
+| Tier 1 Leverage Ratio | FDIC `RBC1AAJ` | > the CBLR qualifying level for the report date (see below); not graded for some dates | 12 CFR 324.12 / 324.403 |
 | Loans-to-Deposits | `LNLSNET` / `DEP` | 50%–80% (band) | **HOUSE** |
 | NPL Ratio | `NCLNLS` / `LNLSGR` | <= 1.0% | **HOUSE** |
 | Reserve Coverage | `LNATRES` / `NCLNLS` | >= 100% | **HOUSE** |
@@ -210,7 +210,8 @@ and it is **not graded**:
 | NIM | net interest income / **total** assets, YTD | **Never** — the 3.5% threshold is calibrated to `NIMY`, which is over average **earning** assets. A larger denominator biases it low at every period, including Q4. |
 | ROAA / ROAE | YTD net income / **period-end** balances | Only at a Q4 `REPDTE`, where the flow covers the full year. |
 | Efficiency Ratio | `(NONIX - EAMINTAN) / ((INTINC - EINTEXP) + NONII)` | **Always** — numerator and denominator are YTD flows over the same period, so the period cancels exactly. Annualizing it would *introduce* an error. |
-| Tier 1, L/D, NPL, Reserve Coverage | period-end balances only | **Always** — no flow item, no period error. |
+| L/D, NPL, Reserve Coverage | period-end balances only | **Always** — no flow item, no period error. |
+| Tier 1 | period-end balances only | Yes, except the report dates and values listed under **Not graded** in the Tier 1 section below — no flow item, no period error. |
 
 Labels follow the basis. "Return on **Average** Assets (ROAA)" is used only when
 the value is FDIC's published `ROA`; the computed fallback renders as "Return on
@@ -221,20 +222,40 @@ A value that is reported but not graded shows its measurement and an explicit
 
 ---
 
-The **Tier 1 Leverage Ratio** thresholds follow bank-capital regulation, not an
-arbitrary target: Strong is the Community Bank Leverage Ratio (CBLR) qualifying
-level (12 CFR 324.12) and Adequate `>= 5%` is the leverage-ratio minimum for
-"well capitalized" under Prompt Corrective Action (12 CFR 324.403(b)(1)(i)(D)).
+The **Tier 1 Leverage Ratio** is graded against bank-capital regulation. Strong
+means **greater than** the Community Bank Leverage Ratio (CBLR) qualifying level
+for institutions that have elected the CBLR framework (12 CFR 324.12(a)(1)). It
+is a comparison with that level, not a finding that this institution has
+elected CBLR or is subject to it. Adequate means `>= 5%`, the leverage minimum
+for "well capitalized" under Prompt Corrective Action (12 CFR
+324.403(b)(1)(i)(D)). Citations are to the FDIC's rules (12 CFR Part 324).
+National banks and federal savings associations are under the OCC's parallel
+provisions (12 CFR 3.12 and 6.4), and state member banks under the Federal
+Reserve's (12 CFR 217.12 and 208.43). This release cites only the FDIC's.
 
-**The CBLR level is selected for the institution's own report date, not applied
-to every period.** It was lowered from 9% to 8% effective 2026-07-01 (91 FR
-22973, published 2026-04-29), so a bank filing at `20260630` is graded against
-9% and one filing at `20260930` against 8%. Through 0.3.1 both were graded
-against 8% — a threshold applied to a period one day before it existed. The
-rendered **Benchmark:** line states which level graded the report and when the
-other one takes effect, so the two are never ambiguous on the page. The PCA leg
-is period-invariant across this window: 12 CFR 324.403(b)(1)(i)(D) reads 5.0%
-at both the 2026-06-30 and 2026-09-04 eCFR snapshots.
+The level is selected for the institution's own report date. This release
+grades against **greater than 9%** at 2020-03-31 and from 2022-03-31 through
+2026-06-30. The level is **greater than 8%** from 2026-07-01. This release's
+schedule was verified against the CFR as in force on **2026-09-22**, so no
+quarter-end report date at the 8% level is graded yet. **The verified date does
+not move by itself. Each quarter after 2026-09-22 shows N/A on Tier 1 until a
+release extends the verified date.**
+
+**Not graded** (the value is shown, the status is N/A, and the report says why):
+
+- report dates before 2020-01-01, when the CBLR framework was not yet in effect;
+- 2020-06-30 through 2021-12-31, when a temporary section (12 CFR 324.303) set
+  the level and this release does not encode it;
+- report dates after 2026-09-22;
+- a missing, malformed or non-quarter-end report date;
+- a value that rounds, at the 2 decimal places this tool's report displays, to
+  the level itself (for example 9.00% against 9%). At that precision this tool
+  cannot state on the face of its report whether the value exceeds the level,
+  so it does not grade it.
+
+**Earlier versions graded some of these dates wrongly, and some rightly.** See
+CHANGELOG.md, [0.3.3], "Disclosure", for which versions, which dates, and in
+which direction.
 
 This is the only threshold in the package with an effective date, because it is
 the only one citing a real instrument. A HOUSE rule of thumb has none.

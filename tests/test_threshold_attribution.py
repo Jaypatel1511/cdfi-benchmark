@@ -201,9 +201,19 @@ def test_house_thresholds_reference_their_own_metrics_constant(metric):
 # applying it to a period before it took effect. No grade moves on the settle
 # read's own subject (13.20% is strong either way); it moves for any bank
 # between 8% and 9% at a report date before 2026-07-01, which is ordinary.
+#
+# 0.3.3: the block above is 0.3.2 history. 0.3.2's 9% row covered every date
+# before 2026-07-01, which was wrong before 2020-01-01 and for 2020-06-30
+# through 2021-12-31; 0.3.3 refuses those dates, and dates after
+# LEVELS_VERIFIED_THROUGH. See tests/test_cblr_schedule.py.
 from cdfibenchmark.data.schema import (
     InstitutionProfile, benchmark_for, CBLR_LEVELS, _PCA_LEVEL,
+    LEVELS_VERIFIED_THROUGH, _iso,
 )
+
+#: 0.3.3, case (a) vs (b): whether LEVELS_VERIFIED_THROUGH reaches 20260930.
+#: Pinned literally: the 0.3.3 build verified through 2026-09-22, case (a).
+_CASE_B = False
 import re
 from cdfibenchmark.metrics.calculator import benchmark_institution
 from cdfibenchmark.report.generator import generate_report
@@ -240,9 +250,9 @@ def _cblr_status(repdte, tier1):
     ("20251231", "ADEQUATE"),   # comfortably before the rule
     ("20260331", "ADEQUATE"),
     ("20260630", "ADEQUATE"),   # the settle read's own period; eff. date - 1 day
-    ("20260701", "STRONG"),     # the effective date itself
-    ("20260930", "STRONG"),
-    ("20261231", "STRONG"),
+    ("20260701", "N/A"),        # 0.3.3: not a quarter-end (NONQ)
+    ("20260930", "STRONG" if _CASE_B else "N/A"),   # BEYOND in case (a)
+    ("20261231", "N/A"),        # 0.3.3: after LEVELS_VERIFIED_THROUGH (BEYOND)
 ])
 def test_the_cblr_band_in_force_at_the_report_date_is_the_one_that_grades(
         repdte, expected):
@@ -250,6 +260,10 @@ def test_the_cblr_band_in_force_at_the_report_date_is_the_one_that_grades(
 
     This is the whole finding in one row. Before 0.3.2 every date here graded
     STRONG, including the four that predate the rule.
+
+    0.3.3 refuses dates it does not attest: 20260701 is not a quarter-end, and
+    20261231 (and 20260930 while LEVELS_VERIFIED_THROUGH precedes it) lies
+    beyond the date the schedule was verified through. Those go N/A.
     """
     status, _ = _cblr_status(repdte, 8.5)
     assert status == expected, (
@@ -259,49 +273,79 @@ def test_the_cblr_band_in_force_at_the_report_date_is_the_one_that_grades(
 
 
 def test_the_pre_effective_benchmark_line_does_not_present_the_new_level():
-    """A reader at 20260630 must not be shown 8% as the applicable level."""
+    """A reader at 20260630 must not be shown 8% as the applicable level.
+
+    0.3.3: the band reads `Strong > 9%` (12 CFR 324.12(a)(1) says "greater
+    than") and names the display band that is not graded.
+    """
     _, report = _cblr_status("20260630", 8.5)
     block = report[report.index("### Tier 1 Leverage Ratio"):]
     block = block[:block.index("\n###")] if "\n###" in block else block
-    assert "Strong >= 9%" in block, (
+    assert "Strong > 9% (a value that rounds to 9.00% is not graded)" in block, (
         f"the pre-effective report grades against a level other than 9%:\n{block}"
     )
-    assert "Strong >= 8%" not in block, (
+    assert "Strong > 8%" not in block, (
         f"the 8% level is presented as applicable at a period before it took "
         f"effect:\n{block}"
     )
+    assert "Strong >= " not in block, block
+    assert "2026-07-01" not in block, block
 
 
-def test_the_benchmark_line_renders_the_effective_date_of_the_band_in_force():
-    """A cited threshold must say which period it is the threshold FOR."""
-    for repdte in ("20260630", "20260930"):
+def test_the_benchmark_line_names_no_date_outside_its_citation():
+    """Formerly `test_the_benchmark_line_renders_the_effective_date_of_the_band_in_force`.
+
+    Its premise is REVERSED in 0.3.3 (methodology v4.2, B2). It asserted that
+    "2026-07-01" rendered at 20260630: the next encoded row's date as a
+    forward clause. But the next ENCODED row is not the next LEGAL change --
+    the 2020-2021 relief rows are deliberately not encoded -- so at 20200331
+    that clause read as though 9% held until 2026-07-01, which is false. An
+    attested line now names no date except inside its own citation; the line
+    says only "at this report date". The general gate is T-R11 in
+    tests/test_cblr_schedule.py.
+    """
+    dates = ["20250630", "20260630"] + (["20260930"] if _CASE_B else [])
+    for repdte in dates:
         _, report = _cblr_status(repdte, 13.2)
         block = report[report.index("### Tier 1 Leverage Ratio"):]
         block = block[:block.index("\n###")] if "\n###" in block else block
-        assert "2026-07-01" in block, (
-            f"{repdte}: the Tier 1 benchmark line does not carry the effective "
-            f"date that separates the two bands:\n{block}"
+        assert "2026-07-01" not in block, (
+            f"{repdte}: the Tier 1 block names another row's effective "
+            f"date:\n{block}"
         )
+        assert "at this report date" in block, block
         assert "12 CFR 324.12" in block and "324.403(b)(1)" in block, (
             f"{repdte}: a citation was dropped:\n{block}"
         )
 
 
 def test_benchmark_for_resolves_only_the_period_dependent_entry():
-    """Every HOUSE threshold is period-invariant; only the CFR one moves."""
+    """Every HOUSE threshold is period-invariant; only the CFR one moves.
+
+    0.3.3: 20261231 is beyond LEVELS_VERIFIED_THROUGH, so tier1 is refused
+    there (good None, BEYOND refusal); in case (b) 20260930 resolves to 8.
+    """
     for metric in sorted(BENCHMARKS):
         early = benchmark_for(metric, "20200331")
-        late = benchmark_for(metric, "20261231")
+        refused = benchmark_for(metric, "20261231")
         if metric == "tier1_ratio":
-            assert early["good"] == 9 and late["good"] == 8, (
-                f"tier1_ratio did not resolve by period: "
-                f"{early['good']} / {late['good']}"
-            )
-            assert early["source"] != late["source"], (
+            assert early["good"] == 9, early
+            assert refused["good"] is None, refused
+            assert refused["refusal"] == (
+                f"This version's CBLR schedule was verified against the CFR as "
+                f"in force on {_iso(LEVELS_VERIFIED_THROUGH)}. This report "
+                f"date, 2026-12-31, is later, so no CBLR qualifying level is "
+                f"applied and this value is not graded. A later release of "
+                f"cdfi-benchmark may cover it."
+            ), refused["refusal"]
+            assert early["source"] != refused["source"], (
                 "the two bands render the same citation, so a reader cannot "
                 "tell which one graded them"
             )
+            if _CASE_B:
+                assert benchmark_for(metric, "20260930")["good"] == 8
         else:
+            late = refused
             assert early == late == BENCHMARKS[metric], (
                 f"{metric} is a HOUSE threshold with no effective date, but "
                 f"benchmark_for changed it by period"
@@ -325,12 +369,22 @@ def test_the_benchmarks_default_is_the_current_cblr_level():
     `CBLR_LEVELS` must move this too -- and it does, because the entry is
     built from `CBLR_LEVELS[-1]` rather than hand-typed. This gate is what
     stops someone re-typing the number.
+
+    0.3.3 (T-R4): the default no longer equals `benchmark_for(None)`, which now
+    refuses (MISSING). The default's source is a built constant stating the
+    level as in force on LEVELS_VERIFIED_THROUGH, for electing institutions,
+    and that no graded report uses it.
     """
-    assert BENCHMARKS["tier1_ratio"]["good"] == CBLR_LEVELS[-1][1]
-    assert BENCHMARKS["tier1_ratio"]["warning"] == _PCA_LEVEL
-    assert BENCHMARKS["tier1_ratio"] == benchmark_for("tier1_ratio", None), (
-        "the no-period resolution and the BENCHMARKS default have drifted apart"
-    )
+    cfg = BENCHMARKS["tier1_ratio"]
+    assert cfg["good"] == CBLR_LEVELS[-1][1]
+    assert cfg["warning"] == _PCA_LEVEL
+    for needle in ("elected", _iso(LEVELS_VERIFIED_THROUGH), "CFR",
+                   "no graded report uses this default"):
+        assert needle in cfg["source"], (needle, cfg["source"])
+    none = benchmark_for("tier1_ratio", None)
+    assert none["good"] is None and none["warning"] is None, none
+    assert none["refusal"].startswith(
+        "This report carries no report date (REPDTE)"), none["refusal"]
 
 
 def test_the_cblr_period_table_is_ordered_and_uses_repdte_shaped_dates():

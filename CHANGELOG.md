@@ -7,7 +7,158 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > History prior to 0.2.0 predates this changelog and is not documented here.
 
+## [0.3.3] - 2026-09-24
+
+A correction to the Tier 1 leverage grade that 0.3.2 introduced.
+
+**Summary.** This release withdraws Tier 1 grades it cannot support, relabels
+the CBLR line, adds a provenance line stating the date the CBLR schedule was
+verified through, and changes the band to `Strong > N%`. **It does make new
+statements.** Every refusal reason is a new statement on the report face. The
+reasons for a missing, malformed or non-quarter-end report date, and for a date
+after the verified date, speak about this tool's own scope. The reasons for a
+date before 2020-01-01 and for 2020-06-30 through 2021-12-31 also speak about
+the law: the framework's effective date (84 FR 61776, Nov. 13, 2019: "The
+final rule is effective on January 1, 2020"), the paragraph numbering of the
+PCA citation (12 CFR 324.403(b)(1)(i)(D) is the designation in the CFR
+edition as of 2020-01-01, whose source note adds 84 FR 61803, Nov. 13, 2019,
+to the 2019 edition's), and the temporary 12 CFR 324.303 (85 FR 22924 and
+85 FR 22930, Apr. 23, 2020).
+
+### Fixed
+
+- **A. Grades for dates before the CBLR framework existed.** Report dates
+  before 2020-01-01 were graded against a CBLR level (8% in 0.2.1-0.3.1, 9% in
+  0.3.2). The framework took effect on January 1, 2020 (84 FR 61776). These
+  dates are now not graded, with a reason.
+- **B1/B2. Grades during the 2020-2021 relief period.** From 2020-06-30 through
+  2021-12-31 the level was set by the temporary 12 CFR 324.303 (equal to or
+  greater than 8% for 2020-06-30 through 2020-12-31, 85 FR 22924; greater than
+  8.5% for 2021, 85 FR 22930), which this release does not encode. These dates
+  are now not graded, with a reason pointing here.
+- **C. `>=` where the rule says "greater than".** 12 CFR 324.12(a)(1) deems an
+  electing institution to meet the requirements "if it has a leverage ratio
+  greater than" the level. A value exactly equal to the level was graded
+  STRONG. The band now reads `Strong > N%`, and every value that rounds to the
+  level at the 2 decimal places the report displays is not graded (see
+  Disclosure, row C).
+- **D. Wording that claimed a level for every earlier date.** The Benchmark
+  line said "...; 9% for report dates before it" and the README table said
+  ">= 9% before 2026-07-01". Both are removed. An attested line now names no
+  date except inside its own citation.
+- **E. Missing, malformed and non-quarter-end report dates were graded.** Each
+  is now refused with its own reason.
+- **F. "The level in force at this report date" read as though CBLR bound
+  every institution.** It binds only institutions that elected it. The line is
+  relabelled as a comparison with the level for institutions that have elected
+  the CBLR framework.
+- **G. A PCA citation shown for dates before the cited paragraph existed.**
+  12 CFR 324.403(b)(1)(i)(D) did not carry that number before 2020. Every
+  affected date is now refused (covered by A), and an import-time data
+  invariant proves the refusal covers the citation.
+
+### Disclosure
+
+What each earlier version said, and what 0.3.3 does. Tier 1 leverage ratio
+(`RBC1AAJ`) only.
+
+| | report dates | what your version said | in 0.3.3 |
+|---|---|---|---|
+| **A** | before 2020-01-01 | **0.2.1-0.3.1:** graded against 8%. **0.3.2:** graded against 9% and said 9% was *"the level in force at this report date"*. The CBLR framework did not exist before 2020-01-01. **All grades of this metric for these dates, in every version, rest on a level that was not in force.** | not graded, with a reason |
+| **B1** | 2020-06-30 through 2020-12-31 | **0.2.1-0.3.1:** graded `>= 8`. **That matched the relief level and its operator; those grades were right.** On the 0.3.0 and 0.3.1 pages the cited section (12 CFR 324.12) was not the one that set the level (12 CFR 324.303). The 0.2.1 page cited nothing; its README named 12 CFR 324.12. **0.3.2:** graded against 9%, so a value in `[8, 9)` shown ADEQUATE had in fact met the relief level for electing institutions (false fail). | not graded, with a reason |
+| **B2** | 2021-03-31 through 2021-12-31 | **0.2.1-0.3.1:** graded `>= 8`, so a value in `[8, 8.5]` shown STRONG did **not** meet the 2021 level of greater than 8.5% (false pass). **0.3.2:** graded against 9%, so a value in `(8.5, 9)` shown ADEQUATE had met it (false fail). | not graded, with a reason |
+| **C** | every date graded | **0.3.2:** `Strong >= 9%` / `>= 8%`, but the level in the cited rule is met only by a ratio *greater than* it. **A value exactly equal to the level was graded STRONG, and that was wrong.** Other values that display as the level (e.g. 8.996 or 9.003, both shown as `9.00%`) were graded **correctly**: ADEQUATE below 9%, STRONG above it. The page simply could not show the difference. **0.2.1-0.3.1:** the same at 8% for dates from 2026-07-01. Before that date, this is inside the `[8, 9]` issue 0.3.2 already disclosed. | band reads `Strong > N%`. **Every value that rounds to the level at 2 decimal places is now withheld**, including the ones 0.3.2 graded correctly, because the report cannot show which side of the level they are on |
+| **D** | reports dated 2026-07-01 or later, and the README/PyPI page | **0.3.2:** said *"9% for report dates before it"* and *">= 9% before 2026-07-01"*. That is false before 2020-01-01 and for 2020-06-30 through 2021-12-31. | removed. **An attested line now names no date except inside its own citation** |
+| **E** | missing, malformed or non-quarter-end REPDTE | **0.3.2:** graded anyway. An empty date got 9% *"in force at this report date"*. The string `"None"` got 8%. A mid-quarter 2020 date could get 9% after the 8% relief took effect. | not graded, each case with its own reason |
+| **F** | every date graded | **0.3.2:** *"the level in force at this report date"* read as though CBLR bound every institution. It binds only institutions that elected it. | relabelled as a comparison with the level for electing institutions. **Election is still not modelled (planned for 0.4.0).** |
+| **G** | before 2020-01-01 | **0.3.2:** cited 12 CFR 324.403(b)(1)(i)(D), a paragraph number that did not exist before 2020. **0.3.0-0.3.1:** cited 12 CFR 324.403(b)(1) on every date, including dates before 12 CFR 324.403 existed (its source note begins in 2014). 0.2.1's page cited nothing. | not graded (covered by A) |
+
+**0.3.3 grade movements vs 0.3.2** (mechanisms only; no population counts are
+stated, because none was measured for this release):
+
+- every Tier 1 grade dated before 2020-01-01 -> N/A;
+- every Tier 1 grade dated 2020-06-30 through 2021-12-31 -> N/A;
+- values that display as the level -> N/A. These are values within about
+  ±0.005 of the level (for 9%, those that round to `9.00`; literal `8.995`
+  displays `8.99` and is not included). **0.3.2's grades for these were
+  correct, except a value exactly equal to the level** (see row C). They are
+  withheld because the report displays all of them as the same figure, so a
+  reader cannot check the grade against what is shown;
+- missing, malformed or non-quarter-end report dates -> N/A;
+- report dates after 2026-09-22, the date this release's CBLR schedule was
+  verified through -> N/A. In 0.3.2, 20260930 and later dates were graded at
+  8%. **Those 0.3.2 grades have not been shown to be wrong.** They are
+  withdrawn because this release's schedule is verified only through
+  2026-09-22 (coverage), not because they were incorrect.
+
+### Added
+
+- `BenchmarkResult.not_graded_reason`: why a metric is not graded, or `None`.
+  `status` and the renderer both read it, so a grade and its reason cannot
+  disagree.
+- A `not_graded_reason` column in `summary_table()` (`None` on graded rows and
+  on every HOUSE row).
+- `LEVELS_VERIFIED_THROUGH` (`cdfibenchmark.data.schema`): the date the CBLR
+  schedule was verified against the CFR (2026-09-22), shown on every report as
+  **CBLR schedule verified through:**. Report dates after it are not graded
+  against a CBLR level.
+- `CBLRScheduleError(CDFIBenchmarkError, RuntimeError)`, exported from
+  `cdfibenchmark`. Raised at import only if the shipped schedule constants break
+  a data invariant. It is deliberately not an `ImportError`, and no check reads
+  the user's clock.
+
+### Changed
+
+- Citation strings give the start page and the section page
+  (`84 FR 61776, 61802, Nov. 13, 2019`; `91 FR 22973, 22989, Apr. 29, 2026`).
+- The attested Tier 1 line names no date except inside its own citation. It
+  reads *"12 CFR 324.12(a)(1) (CBLR qualifying level for institutions that have
+  elected the CBLR framework: greater than 9% at this report date — 84 FR
+  61776, 61802, Nov. 13, 2019)"*.
+- The `BENCHMARKS["tier1_ratio"]` default `source` is a built constant stating
+  the level as in force on the verified date, and that no graded report uses
+  the default. `good` stays `CBLR_LEVELS[-1][1]` (8) and `warning` stays 5.
+- `benchmark_for("tier1_ratio", None)` refuses (no report date) instead of
+  applying current law, so it no longer equals the `BENCHMARKS` default.
+- On a refused row, `source` / `threshold_source` is the reason behind the
+  prefix `none applied at this report date: `, never a citation.
+- 0.3.3 moves the part of 0.3.2's `[8.0, 9.0)` band that displays as 9.00 on to
+  N/A. This is not a withdrawal of the 0.3.2 entry, which is true history of
+  0.3.2.
+
+### Changed (CI only, no package code)
+
+- GitHub Actions runners pinned to `ubuntu-24.04` (commit `f4b21e5`, merged at
+  `65d5e29`). These are the only changes between `v0.3.2` and the base of this
+  release.
+
+### Known limitations
+
+1. Election of the CBLR framework is not modelled (planned for 0.4.0). The
+   Tier 1 line is a comparison with the level for electing institutions, not a
+   finding that the institution elected it.
+2. The 2020-2021 relief window (12 CFR 324.303) is not encoded (planned for
+   0.4.0); those dates are refused.
+3. The same display ambiguity exists at the PCA edge and is not fixed: a value
+   of 4.996 displays as `5.00%` and grades WEAK. The rule reads "5.0 percent or
+   greater", so the grade is right, but it cannot be checked against the figure
+   on the page (planned for 0.4.0).
+4. **Citations are to FDIC 12 CFR Part 324 only.** National banks and federal
+   savings associations are under the OCC's parallel provisions (12 CFR 3.12 and
+   6.4), and state member banks under the Federal Reserve's (12 CFR 217.12 and
+   208.43). This release cites only the FDIC's. It makes no claim about whether
+   the levels in those parts match.
+5. **Under pandas 3, missing values in the string columns of `summary_table()`
+   other than `not_graded_reason` (for example `basis` and `threshold_source`)
+   appear as `NaN`, not `None`.** Test them with `pd.isna`.
+6. **Rendering `peer_count` beside a thin peer cell, which the 0.3.2 entry said
+   "belongs in 0.3.3", is deferred and is still a known issue.** 0.3.3 is
+   scoped to the CBLR fix.
+
 ## [0.3.2] - 2026-09-09
+
+> Corrected in 0.3.3: this re-grade was wrong for report dates before
+> 2020-01-01 and from 2020-06-30 through 2021-12-31. See [0.3.3].
 
 The eighth settle read of the rendered artifact, the fifth defect family it
 found that every gate and every fresh audit missed, and the hostile audit that
