@@ -2,8 +2,12 @@
 Core dataclasses and constants for CDFI benchmarking.
 Uses FDIC BankFind Suite API — free, no API key required.
 """
+import datetime
+import re
 from dataclasses import dataclass, field
 from typing import Optional
+
+from cdfibenchmark.exceptions import CBLRScheduleError
 
 
 def _is_missing(x) -> bool:
@@ -135,19 +139,19 @@ HOUSE_RESERVE_COVERAGE_WARNING = 50
 
 # The CBLR qualifying leverage level, BY THE PERIOD IT IS IN FORCE FOR.
 #
-# This was one flat string: "12 CFR 324.12 (CBLR qualifying, lowered 9%->8%
-# eff. 2026-07-01)", with `good: 8` beside it. So the tool graded a 20260630
-# report against a level its own prose dates to the day AFTER that period. No
-# grade moved on the subject that surfaced it (13.20% is strong under either
-# band); it moves for any bank between 8% and 9% at a report date before
-# 2026-07-01, which is an ordinary case.
+# HISTORY (0.3.2, 2026-09-09). This was one flat string: "12 CFR 324.12 (CBLR
+# qualifying, lowered 9%->8% eff. 2026-07-01)", with `good: 8` beside it. So the
+# tool graded a 20260630 report against a level its own prose dates to the day
+# AFTER that period. No grade moved on the subject that surfaced it (13.20% is
+# strong under either band); it moved for any bank between 8% and 9% at a
+# report date before 2026-07-01, which is an ordinary case.
 #
 # tier1_ratio is the ONLY cited entry here (see the note above). Every other
 # threshold is HOUSE, and a house rule of thumb has no effective date to get
 # wrong. Period-awareness is therefore not a general mechanism this module
 # needs everywhere -- it is needed exactly where a real instrument is cited.
 #
-# DERIVED FROM PRIMARY TEXT 2026-09-09, not from the string it replaces:
+# The 0.3.2 derivation, from primary text on 2026-09-09 (kept as history):
 #   * eCFR 12 CFR 324.12(a)(1) @ 2026-06-30 -> "greater than 9 percent"
 #   * eCFR 12 CFR 324.12(a)(1) @ 2026-07-01 -> "greater than 8 percent"
 #     (and (a)(2)(i), the qualifying criterion, moves with it)
@@ -157,68 +161,93 @@ HOUSE_RESERVE_COVERAGE_WARNING = 50
 #     Bank Leverage Ratio Framework", 91 FR 22973, published 2026-04-29,
 #     effective_on 2026-07-01
 #
-# The rule is real and the date is right. Only the application was wrong.
+# 0.3.3: WHAT THIS SCHEDULE ATTESTS, AND WHAT IT REFUSES. 0.3.2 applied the 9%
+# row to every date before 2026-07-01, which was wrong before the framework
+# existed and during the 2020-2021 relief period. The legal schedule
+# (methodology v4.2 section 2.1; sources marked there):
+#   * before 2020-01-01: no CBLR framework (84 FR 61776 DATES: "The final rule
+#     is effective on January 1, 2020.")                      -> refuse (BELOW)
+#   * 2020-01-01: greater than 9 percent, 12 CFR 324.12(a)(1), 84 FR 61776,
+#     61802 (Nov. 13, 2019)                        -> attest at 20200331 only
+#   * 2020-04-23: equal to or greater than 8 percent, former 12 CFR
+#     324.303(a)(2), 85 FR 22924, 22929        -> refuse 20200630..20201231
+#   * 2021-01-01: greater than 8.5 percent, former 12 CFR 324.303(d)(2)(ii),
+#     85 FR 22930, 22938                       -> refuse 20210331..20211231
+#     (12 CFR 324.303 is not encoded in this release; hence RELIEF.)
+#   * 2022-01-01: greater than 9 percent again, 12 CFR 324.12(a)(1)
+#                                              -> attest 20220331..20260630
+#   * 2026-07-01: greater than 8 percent, 91 FR 22973, 22989 (Apr. 29, 2026)
+#                               -> attest only through LEVELS_VERIFIED_THROUGH
+#   * after LEVELS_VERIFIED_THROUGH: not verified            -> refuse (BEYOND)
 #
-#: (first REPDTE the level applies to, level, the rule that set it), oldest
-#: first. A date-string comparison is correct here because REPDTE is
-#: zero-padded YYYYMMDD, which sorts lexicographically.
+# LEVELS_VERIFIED_THROUGH, recorded by the 0.3.3 build on 2026-09-24
+# (America/Chicago; 2026-09-25T01:58Z), per methodology v4.2 section 5:
+#   1. LII https://www.law.cornell.edu/cfr/text/12/324.12 (WebFetch): (a)(1)
+#      ends "... if it has a leverage ratio greater than 8 percent."; source
+#      note "[84 FR 61802, Nov. 13, 2019, as amended at 85 FR 77363, Dec. 2,
+#      2020; 91 FR 22989, Apr. 29, 2026]". LII states no as-of date.
+#      eCFR versioner (WebFetch): title 12 up_to_date_as_of 2026-09-22; the
+#      324.12 version list ends at 2026-07-01 (no later version).
+#   2. federalregister.gov API (WebFetch), documents with CFR 12 part 324:
+#      term "community bank leverage ratio", published >= 2026-04-29 -> 1
+#      result, 2026-08298 itself (2026-04-29); any term, published >=
+#      2026-04-30 -> 0 results.
+#   LVT = min(read date 2026-09-24, eCFR as-of 2026-09-22) = 2026-09-22. That
+#   is before 2026-09-30, so NO report date is graded at the 8% row in 0.3.3
+#   (case (a)); the row stays because the BENCHMARKS default is built from it.
+
+#: The CBLR framework's effective date (84 FR 61776 DATES). Report dates before
+#: it are refused (BELOW): no CBLR level was in force.
+CBLR_FRAMEWORK_EFFECTIVE = "20200101"
+
+#: (effective date of the level, level, rule citation as start page and
+#: section page), oldest first. A date-string comparison is correct here
+#: because REPDTE is zero-padded YYYYMMDD, which sorts lexicographically. Only
+#: 12 CFR 324.12(a)(1) "greater than" rows are encoded; the 2020-2021 relief
+#: levels (12 CFR 324.303) are not, and are refused (CBLR_RELIEF_REFUSED).
 CBLR_LEVELS = (
-    ("00000000", 9, "84 FR 61802, Nov. 13, 2019"),
-    ("20260701", 8, "91 FR 22973, Apr. 29, 2026"),
+    ("20200101", 9, "84 FR 61776, 61802, Nov. 13, 2019"),
+    ("20260701", 8, "91 FR 22973, 22989, Apr. 29, 2026"),
 )
 
-#: The PCA well-capitalized leverage minimum. Verified period-INVARIANT across
-#: the same window: 12 CFR 324.403(b)(1)(i)(D) reads "5.0 percent or greater"
-#: at both the 2026-06-30 and 2026-09-04 eCFR snapshots, and the section's
-#: source credit is unchanged between them. So this leg needs no resolution,
-#: and saying that explicitly is what stops the next reader from assuming the
-#: whole citation moved.
+#: Quarter-end report dates (inclusive range) at which 12 CFR 324.303, which
+#: this release does not encode, set the level. Refused (RELIEF).
+CBLR_RELIEF_REFUSED = ("20200630", "20211231")
+
+#: The date on which the build read the operative CFR text of 12 CFR
+#: 324.12(a)(1) and confirmed no later amendment (see the block above). Report
+#: dates after it are refused (BEYOND). Never a future date at build time; the
+#: test suite checks that, and nothing here reads the user's clock.
+LEVELS_VERIFIED_THROUGH = "20260922"
+
+#: The first date the PCA citation `_PCA` names a paragraph that exists in that
+#: form: the well-capitalized leverage condition reads at 324.403(b)(1)(iv) in
+#: the CFR-2019 edition and at (b)(1)(i)(D) in the CFR-2020 edition (as of
+#: 2020-01-01), whose source note adds 84 FR 61803. No runtime branch of its own: every
+#: earlier date is refused by BELOW, and the import-time invariant G5 proves
+#: this constant never exceeds CBLR_FRAMEWORK_EFFECTIVE.
+_PCA_CITED_FROM = "20200101"
+
+_QUARTER_ENDS = ("0331", "0630", "0930", "1231")
+
+#: The PCA well-capitalized leverage minimum. 12 CFR 324.403(b)(1)(i)(D) reads
+#: "5.0 percent or greater" in the CFR-2020 edition (as of 2020-01-01), in the
+#: CFR-2023 edition, and on LII current (shown "current as of December 1,
+#: 2025"). Those three points are what was verified; the 2021, 2022, 2024 and
+#: 2025 editions were not read. For dates before 2020 see _PCA_CITED_FROM.
 _PCA_LEVEL = 5
 _PCA = ("12 CFR 324.403(b)(1)(i)(D) (PCA well-capitalized leverage "
         "minimum, 5.0%)")
 
+#: Decimal places every percentage on the report is rendered at. Lives here,
+#: not in the generator, because the display-equality refusal (_EQUAL_REASON)
+#: must compare with the SAME formatter the report prints with.
+DISPLAY_PCT_DP = 2
 
-def _cblr_at(report_date):
-    """The CBLR qualifying level in force at `report_date`, and how to cite it.
 
-    Returns ``(level, citation)``. `report_date` is a REPDTE string.
-    """
-    if report_date is None:
-        # A level carrying an effective date cannot be checked against no date.
-        # Fall back to current law -- but SAY that is what happened, rather than
-        # letting an unknown period silently pick a band. In practice REPDTE is
-        # always present on an FDIC-parsed profile; this path is for a
-        # hand-built one.
-        eff, level, rule = CBLR_LEVELS[-1]
-        return level, (
-            f"12 CFR 324.12 (CBLR qualifying level {level:g}%, eff. "
-            f"{_iso(eff)}, {rule} — applied because this report carries no "
-            f"period, so the level in force could not be determined)"
-        )
-
-    report_date = str(report_date)
-    chosen = CBLR_LEVELS[0]
-    for entry in CBLR_LEVELS:
-        if report_date >= entry[0]:
-            chosen = entry
-    eff, level, rule = chosen
-
-    later = [e for e in CBLR_LEVELS if e[0] > eff]
-    if later:
-        nxt_eff, nxt_level, nxt_rule = later[0]
-        return level, (
-            f"12 CFR 324.12 (CBLR qualifying level {level:g}% — the level in "
-            f"force at this report date; {nxt_level:g}% eff. "
-            f"{_iso(nxt_eff)}, {nxt_rule})"
-        )
-    earlier = [e for e in CBLR_LEVELS if e[0] < eff]
-    if earlier:
-        prv_level = earlier[-1][1]
-        return level, (
-            f"12 CFR 324.12 (CBLR qualifying level {level:g}% — eff. "
-            f"{_iso(eff)}, {rule}; {prv_level:g}% for report dates before it)"
-        )
-    return level, f"12 CFR 324.12 (CBLR qualifying level {level:g}%, {rule})"
+def fmt_pct_digits(value) -> str:
+    """`value` as the report prints it, without the % sign."""
+    return f"{value:.{DISPLAY_PCT_DP}f}"
 
 
 def _iso(repdte: str) -> str:
@@ -226,12 +255,177 @@ def _iso(repdte: str) -> str:
     return f"{repdte[0:4]}-{repdte[4:6]}-{repdte[6:8]}"
 
 
+def _parses(yyyymmdd) -> bool:
+    """True if `yyyymmdd` is an 8-digit calendar date."""
+    if not isinstance(yyyymmdd, str) or not re.fullmatch(r"\d{8}", yyyymmdd):
+        return False
+    try:
+        datetime.datetime.strptime(yyyymmdd, "%Y%m%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _check_cblr_schedule(levels, relief, lvt, pca_from, framework_effective):
+    """Pure data invariants of the CBLR schedule (G1-G5). No clock.
+
+    Called once at import with the live constants. Every check is a function
+    of constants only, so it can fail only if the package shipped broken, and
+    it raises CBLRScheduleError (not ImportError) naming the invariant.
+    """
+    # G1: every floor is a real date; the first floor is the framework date.
+    for floor, _level, _rule in levels:
+        if not _parses(floor):
+            raise CBLRScheduleError(f"G1: CBLR floor {floor!r} is not a date")
+    if levels[0][0] != framework_effective:
+        raise CBLRScheduleError(
+            f"G1: first CBLR floor {levels[0][0]!r} != framework effective "
+            f"date {framework_effective!r}")
+    # G2: floors strictly increasing, levels positive.
+    for (f0, _l0, _r0), (f1, _l1, _r1) in zip(levels, levels[1:]):
+        if not f0 < f1:
+            raise CBLRScheduleError(
+                f"G2: CBLR floors not strictly increasing: {f0!r}, {f1!r}")
+    for floor, level, _rule in levels:
+        if not level > 0:
+            raise CBLRScheduleError(f"G2: CBLR level at {floor!r} is {level!r}")
+    # G3: the verified-through date is a date, not before the last row.
+    if not _parses(lvt):
+        raise CBLRScheduleError(f"G3: LEVELS_VERIFIED_THROUGH {lvt!r} is not a date")
+    if not levels[-1][0] <= lvt:
+        raise CBLRScheduleError(
+            f"G3: LEVELS_VERIFIED_THROUGH {lvt!r} precedes the last CBLR "
+            f"row {levels[-1][0]!r}")
+    # G4: the relief range is two quarter-ends inside the first row's span.
+    lo, hi = relief
+    for bound in (lo, hi):
+        if not _parses(bound) or bound[4:] not in _QUARTER_ENDS:
+            raise CBLRScheduleError(
+                f"G4: relief bound {bound!r} is not a quarter-end date")
+    if not lo <= hi:
+        raise CBLRScheduleError(f"G4: relief range {relief!r} is reversed")
+    if not framework_effective < lo:
+        raise CBLRScheduleError(
+            f"G4: relief start {lo!r} is not after the framework date")
+    if len(levels) > 1 and not hi < levels[1][0]:
+        raise CBLRScheduleError(
+            f"G4: relief end {hi!r} crosses the second CBLR row {levels[1][0]!r}")
+    # G5: the PCA paragraph cited exists from the framework date on.
+    if not pca_from <= framework_effective:
+        raise CBLRScheduleError(
+            f"G5: _PCA_CITED_FROM {pca_from!r} is after the framework date "
+            f"{framework_effective!r}, so a graded date could cite a paragraph "
+            f"that did not exist")
+
+
+_check_cblr_schedule(CBLR_LEVELS, CBLR_RELIEF_REFUSED, LEVELS_VERIFIED_THROUGH,
+                     _PCA_CITED_FROM, CBLR_FRAMEWORK_EFFECTIVE)
+
+#: Prefix on `source` / `threshold_source` when a date is refused, so the
+#: reason is never read as a citation.
+_REFUSED_SOURCE_PREFIX = "none applied at this report date: "
+
+#: The display-equality refusal (methodology v4.2 section 6). One wording, true
+#: on the report face, in `summary_table` and in the README.
+_EQUAL_REASON = (
+    "This value rounds to {shown}% at the {dp} decimal places this tool's "
+    "report displays, which is the CBLR qualifying level for this report date "
+    "itself ({level:g}%). At that precision this tool cannot state on the face "
+    "of its report whether the value exceeds the level, so it does not grade it."
+)
+
+
+def _cblr_at(report_date):
+    """Resolve the CBLR qualifying level for `report_date`, or refuse.
+
+    Returns ``(level, citation_text)`` for an attested date, and
+    ``(None, reason)`` for a refused one. `report_date` is a REPDTE (a str; an
+    int is normalised with str()). Checks run in this order and the first match
+    wins: MISSING, MALFORMED, NONQ (not a quarter-end), BELOW (before the
+    framework), RELIEF (12 CFR 324.303, not encoded), BEYOND (after
+    LEVELS_VERIFIED_THROUGH); otherwise the last row whose effective date is on
+    or before the report date. There is no fallback row.
+
+    An attested text names no date except inside its own citation.
+    """
+    d = None if report_date is None else str(report_date).strip()
+    if d is None or d in ("", "None"):
+        return None, (
+            "This report carries no report date (REPDTE), so the period its "
+            "Tier 1 leverage ratio describes is unknown. The CBLR qualifying "
+            "level (12 CFR 324.12) depends on the period, so none is applied "
+            "and this value is not graded."
+        )
+    if not _parses(d):
+        return None, (
+            f"The report date {d!r} is not a calendar date in YYYYMMDD form, "
+            f"so the period this value describes cannot be established. No "
+            f"CBLR qualifying level is applied and this value is not graded."
+        )
+    iso = _iso(d)
+    if d[4:] not in _QUARTER_ENDS:
+        return None, (
+            f"The report date {iso} is not a Call Report quarter-end (March 31, "
+            f"June 30, September 30 or December 31). This tool applies a CBLR "
+            f"qualifying level only at quarter-end report dates, so none is "
+            f"applied and this value is not graded."
+        )
+    if d < CBLR_FRAMEWORK_EFFECTIVE:
+        return None, (
+            f"The community bank leverage ratio framework (12 CFR 324.12) took "
+            f"effect on January 1, 2020 (84 FR 61776, Nov. 13, 2019). This "
+            f"report date, {iso}, is earlier, so no CBLR qualifying level was "
+            f"in force and none is applied. The PCA leverage leg is withheld "
+            f"too: the paragraph this tool cites for it, 12 CFR "
+            f"324.403(b)(1)(i)(D), did not carry that number before 2020. This "
+            f"value is not graded."
+        )
+    if CBLR_RELIEF_REFUSED[0] <= d <= CBLR_RELIEF_REFUSED[1]:
+        return None, (
+            f"For report dates from {_iso(CBLR_RELIEF_REFUSED[0])} through "
+            f"{_iso(CBLR_RELIEF_REFUSED[1])} the CBLR qualifying level was set "
+            f"by a temporary section, 12 CFR 324.303, which this version of "
+            f"cdfi-benchmark does not encode. No CBLR qualifying level is "
+            f"applied at {iso} and this value is not graded. The PCA leverage "
+            f"leg is withheld too, so that a partial grade is not read as a "
+            f"full one. See CHANGELOG.md, section [0.3.3]."
+        )
+    if d > LEVELS_VERIFIED_THROUGH:
+        return None, (
+            f"This version's CBLR schedule was verified against the CFR as in "
+            f"force on {_iso(LEVELS_VERIFIED_THROUGH)}. This report date, "
+            f"{iso}, is later, so no CBLR qualifying level is applied and this "
+            f"value is not graded. A later release of cdfi-benchmark may cover "
+            f"it."
+        )
+    chosen = None
+    for row in CBLR_LEVELS:
+        if row[0] <= d:
+            chosen = row
+    if chosen is None:
+        raise CBLRScheduleError(
+            f"unreachable: {d} passed every refusal check but precedes "
+            f"CBLR_LEVELS[0]")
+    _eff, level, rule = chosen
+    return level, (
+        f"12 CFR 324.12(a)(1) (CBLR qualifying level for institutions that "
+        f"have elected the CBLR framework: greater than {level:g}% at this "
+        f"report date — {rule})"
+    )
+
+
 def benchmark_for(metric: str, report_date: str = None) -> dict:
-    """`BENCHMARKS[metric]`, resolved to the band in force at `report_date`.
+    """`BENCHMARKS[metric]`, resolved for `report_date`.
 
     Every HOUSE entry is returned unchanged and IS the same object: a rule of
     thumb has no effective date, so there is nothing to resolve. Only
     tier1_ratio, the one entry citing a real instrument, varies by period.
+
+    For tier1_ratio an attested date gets its level as `good` plus
+    ``good_exclusive=True`` (every attested row is a "greater than" row). A
+    refused date gets ``good=None, warning=None``, a `refusal` reason, and a
+    `source` that is that reason behind the prefix "none applied at this report
+    date: " -- see `_cblr_at`.
 
     This is the single place that answers "which threshold applies", so a grade
     and the Benchmark line rendered beside it cannot disagree about it.
@@ -239,8 +433,23 @@ def benchmark_for(metric: str, report_date: str = None) -> dict:
     config = BENCHMARKS.get(metric, {})
     if metric != "tier1_ratio":
         return config
-    level, cblr = _cblr_at(report_date)
-    return {**config, "good": level, "source": f"{cblr}; {_PCA}"}
+    level, text = _cblr_at(report_date)
+    if level is None:
+        return {**config, "good": None, "warning": None,
+                "source": _REFUSED_SOURCE_PREFIX + text, "refusal": text}
+    return {**config, "good": level, "source": f"{text}; {_PCA}",
+            "good_exclusive": True}
+
+
+#: The `source` of the BENCHMARKS tier1 default. Built, not typed: every claim
+#: in it is true on LEVELS_VERIFIED_THROUGH. No graded report uses it.
+_TIER1_DEFAULT_SOURCE = (
+    f"12 CFR 324.12(a)(1) (CBLR qualifying level for institutions that have "
+    f"elected the CBLR framework: greater than {CBLR_LEVELS[-1][1]:g}% as in "
+    f"force on {_iso(LEVELS_VERIFIED_THROUGH)}, {CBLR_LEVELS[-1][2]}; no "
+    f"graded report uses this default — every report is resolved to its own "
+    f"report date); {_PCA}"
+)
 
 
 # ── Benchmark Thresholds ──────────────────────────────────────────────────────
@@ -262,18 +471,20 @@ BENCHMARKS = {
         "unit": "%", "source": "HOUSE",
     },
     # The ONLY cited entry. tier1_ratio grades the Tier 1 LEVERAGE ratio
-    # (RBC1AAJ): STRONG >= the CBLR qualifying level; ADEQUATE >= 5 = PCA
-    # well-capitalized leverage; WEAK < 5.
+    # (RBC1AAJ): STRONG > the CBLR qualifying level (a value displayed as equal
+    # to it is not graded); ADEQUATE >= 5 = PCA well-capitalized leverage;
+    # WEAK < 5.
     #
-    # `good` here is CURRENT LAW. It is not what grades: `benchmark_for` above
-    # resolves it to the level in force at the institution's own report date,
-    # and both `BenchmarkResult.status` and the rendered Benchmark line go
-    # through that resolver. This entry is the default a caller reading
-    # BENCHMARKS directly gets, and the two must not drift -- see
+    # `good` here is the level as in force on LEVELS_VERIFIED_THROUGH. It is
+    # not what grades: `benchmark_for` above resolves each report to its own
+    # report date (or refuses it), and both `BenchmarkResult.status` and the
+    # rendered Benchmark line go through that resolver. This entry is the
+    # default a caller reading BENCHMARKS directly gets; it is built from
+    # CBLR_LEVELS[-1] so nobody can re-type the number -- see
     # `test_the_benchmarks_default_is_the_current_cblr_level`.
     "tier1_ratio": {
         "good": CBLR_LEVELS[-1][1], "warning": _PCA_LEVEL,
-        "unit": "%", "source": f"{_cblr_at(None)[1]}; {_PCA}",
+        "unit": "%", "source": _TIER1_DEFAULT_SOURCE,
     },
     # Banded: WEAK below `floor` (under-deployed) as well as above `warning`
     # (funding strain). See the HOUSE_LTD_* block above.
@@ -778,8 +989,33 @@ class BenchmarkResult:
     #: be selected FOR a period, not applied to every period -- 0.3.1 graded a
     #: 20260630 report against a CBLR level effective 2026-07-01. Kept on the
     #: result rather than looked up at render time so the grade and the rendered
-    #: Benchmark line cannot resolve to different bands.
+    #: Benchmark line cannot resolve to different bands. A date the schedule
+    #: refuses (see `_cblr_at`) yields N/A with `not_graded_reason`.
     report_date: Optional[str] = None
+
+    @property
+    def not_graded_reason(self) -> Optional[str]:
+        """Why this metric is not graded against its threshold, or None.
+
+        The schedule's refusal reason for this report date if there is one
+        (whatever the value, including a missing one). Otherwise, on a
+        "greater than" row, the display-equality reason when the value rounds
+        to the level at DISPLAY_PCT_DP places -- compared with the same
+        formatter the report prints with. `status` and the renderer both read
+        this one property, so a grade and its reason cannot disagree.
+        """
+        benchmark = benchmark_for(self.metric, self.report_date)
+        refusal = benchmark.get("refusal")
+        if refusal:
+            return refusal
+        good = benchmark.get("good")
+        if (benchmark.get("good_exclusive") and good is not None
+                and not _is_missing(self.institution_value)
+                and fmt_pct_digits(self.institution_value) == fmt_pct_digits(good)):
+            return _EQUAL_REASON.format(
+                shown=fmt_pct_digits(self.institution_value),
+                dp=DISPLAY_PCT_DP, level=good)
+        return None
 
     @property
     def vs_median(self) -> Optional[float]:
@@ -803,6 +1039,12 @@ class BenchmarkResult:
         lower = benchmark.get("lower_is_better", False)
 
         if good is None:
+            return "N/A"
+        # A refused report date, or a value the report displays as the level
+        # itself: shown, not graded, with the reason on `not_graded_reason`.
+        # Past this point every graded value displays strictly above or below
+        # a "greater than" level, so the `>=` below is exactly the law's `>`.
+        if self.not_graded_reason is not None:
             return "N/A"
 
         # Banded metric: a value below `floor` is WEAK regardless of the ladder

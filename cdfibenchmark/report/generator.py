@@ -7,7 +7,8 @@ import pandas as pd
 from cdfibenchmark.data.schema import (
     InstitutionProfile, BenchmarkResult, BENCHMARKS, benchmark_for, _is_missing,
     BASIS_FDIC, GRADEABLE_BASES, BASIS_REJECTED_IMPLAUSIBLE,
-    asset_bucket_bounds_text,
+    asset_bucket_bounds_text, DISPLAY_PCT_DP, fmt_pct_digits,
+    LEVELS_VERIFIED_THROUGH, _iso,
 )
 from cdfibenchmark.metrics.calculator import (
     compute_peer_metrics, benchmark_institution, rank_institution
@@ -22,7 +23,7 @@ def _fmt_pct(value) -> str:
     """
     if _is_missing(value):
         return "N/A"
-    return f"{value:.2f}%"
+    return fmt_pct_digits(value) + "%"
 
 
 def _fmt_assets_mm(value_mm) -> str:
@@ -62,7 +63,9 @@ _COMPUTED_LABELS = {
 
 
 #: Decimal places every percentage on the report is rendered at (`_fmt_pct`).
-_PCT_DP = 2
+#: Imported, not typed: the display-equality refusal in schema compares with
+#: the same precision, and the two must not drift.
+_PCT_DP = DISPLAY_PCT_DP
 
 #: Decimal places the RELATIVE gap is rendered at. One is deliberate: the
 #: relative figure is a ratio of two already-rounded numbers, and rendering it
@@ -248,8 +251,18 @@ def _threshold_line(metric: str, report_date: str = None) -> str:
     threshold FOR. This line resolves through the same `benchmark_for` the
     grade does, so the band shown and the band graded against are the same one
     by construction rather than by two call sites agreeing.
+
+    A refused report date (tier1_ratio only; see `_cblr_at`) still gets a line,
+    saying that no level is applied and pointing at the **Not graded** line.
+    A "greater than" row (``good_exclusive``) renders ``Strong > N%`` and names
+    the display band that is not graded.
     """
     benchmark = benchmark_for(metric, report_date)
+    if benchmark.get("refusal"):
+        return ("**Benchmark:** none applied at this report date — no CBLR "
+                "qualifying level (12 CFR 324.12) or PCA leverage level "
+                "(12 CFR 324.403) is applied; the reason is stated under "
+                "**Not graded** below")
     good = benchmark.get("good")
     warning = benchmark.get("warning")
     floor = benchmark.get("floor")
@@ -271,6 +284,10 @@ def _threshold_line(metric: str, report_date: str = None) -> str:
                 f"Weak below {floor}% (under-deployed) or above {warning}%")
     elif lower:
         band = f"Strong <= {good}% | Adequate <= {warning}%"
+    elif benchmark.get("good_exclusive"):
+        band = (f"Strong > {good:g}% (a value that rounds to "
+                f"{fmt_pct_digits(good)}% is not graded) | "
+                f"Adequate >= {warning}%")
     else:
         band = f"Strong >= {good}% | Adequate >= {warning}%"
 
@@ -281,6 +298,37 @@ def _threshold_line(metric: str, report_date: str = None) -> str:
     else:
         attribution = ""
     return f"**Benchmark:** {band}{attribution}"
+
+
+def _basis_not_gradeable(result) -> bool:
+    """A present value measured on a basis the threshold was not calibrated on."""
+    return bool(result.basis and result.basis not in GRADEABLE_BASES
+                and not _is_missing(result.institution_value))
+
+
+def _not_graded_lines(result) -> list:
+    """At most ONE `**Not graded:**` line for a metric.
+
+    Two reasons can apply: the schedule / display-equality reason
+    (`result.not_graded_reason`) and a non-gradeable basis. When both apply
+    they share one line, schedule reason first, because it is why no threshold
+    applies at all. A value that is present but ungraded must say WHY, or an
+    em-dash in the Status column reads as missing data.
+    """
+    reason = result.not_graded_reason
+    basis_sentence = (
+        f"this value is {result.basis}. The threshold is calibrated to FDIC's "
+        f"published annualized series, so the two are not comparable; the "
+        f"measured value is reported above."
+    )
+    basis = _basis_not_gradeable(result)
+    if reason and basis:
+        return [f"**Not graded:** {reason} Separately, {basis_sentence}"]
+    if reason:
+        return [f"**Not graded:** {reason}"]
+    if basis:
+        return [f"**Not graded:** {basis_sentence}"]
+    return []
 
 
 def _asset_bucket_line(institution) -> str:
@@ -353,6 +401,9 @@ def _provenance_block(institution, peers) -> list:
         "## Provenance",
         "",
         f"**Tool:** {tool}",
+        f"**CBLR schedule verified through:** "
+        f"{_iso(LEVELS_VERIFIED_THROUGH)} — report dates after this are not "
+        f"graded against a CBLR level",
         f"**Report Generated:** {generated}",
     ]
 
@@ -498,18 +549,13 @@ def generate_report(
 
         lines.append(f"**Status:** {result.status}")
         # A value that is present but ungraded must say WHY, or an em-dash in
-        # the Status column reads as missing data.
-        if (result.basis and result.basis not in GRADEABLE_BASES
-                and not _is_missing(result.institution_value)):
-            lines.append(
-                f"**Not graded:** this value is {result.basis}. The threshold "
-                f"is calibrated to FDIC's published annualized series, so the "
-                f"two are not comparable; the measured value is reported above."
-            )
+        # the Status column reads as missing data. One line at most.
+        lines += _not_graded_lines(result)
         # An ABSENT value normally needs no explanation. A REFUSED one does: the
         # number exists, FDIC published it, and this tool decided not to show it.
         # Left unsaid, that is indistinguishable from FDIC never publishing it.
-        elif result.basis == BASIS_REJECTED_IMPLAUSIBLE:
+        if (not _basis_not_gradeable(result)
+                and result.basis == BASIS_REJECTED_IMPLAUSIBLE):
             lines.append(
                 "**Not shown:** FDIC published a value for this metric that "
                 "falls outside this tool's plausibility bound for a percentage, "
@@ -590,5 +636,6 @@ def summary_table(
             "peer_count": r.peer_count,
             "basis": r.basis,
             "threshold_source": r.source,
+            "not_graded_reason": r.not_graded_reason,
         })
     return pd.DataFrame(rows)

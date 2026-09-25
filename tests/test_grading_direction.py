@@ -18,10 +18,16 @@ from cdfibenchmark.data.schema import BENCHMARKS, BenchmarkResult
 _RANK = {"WEAK": 0, "ADEQUATE": 1, "STRONG": 2}
 
 
+#: tier1_ratio is resolved by report date and refuses a missing one (0.3.3),
+#: so its axis is walked at an attested quarter-end. HOUSE metrics ignore it.
+_TIER1_AXIS_DATE = "20250630"
+
+
 def _status(metric, value):
     return BenchmarkResult(
         metric=metric, institution_value=value,
         peer_median=None, peer_25th=None, peer_75th=None, peer_count=0,
+        report_date=_TIER1_AXIS_DATE if metric == "tier1_ratio" else None,
     ).status
 
 
@@ -42,7 +48,16 @@ def test_every_metric_grades_monotonically_in_its_declared_direction(metric):
 
     lower_is_better = cfg.get("lower_is_better", False)
     axis = [-10, 0, 0.5, 1, 2.5, 3.5, 5, 8, 10, 25, 50, 60, 80, 95, 100, 130, 200]
-    grades = [_RANK[_status(metric, v)] for v in axis]
+    # A value the tool withholds (N/A) has no rank. Skip it, but COUNT it, and
+    # require the count to be zero: no axis value here displays as a level, so
+    # a skip would mean a grade silently vanished from the walk.
+    statuses = [_status(metric, v) for v in axis]
+    skipped = sum(1 for s in statuses if s == "N/A")
+    assert skipped == 0, (
+        f"{metric}: {skipped} axis values graded N/A; monotonicity would be "
+        f"checked over a partial axis: {list(zip(axis, statuses))}"
+    )
+    grades = [_RANK[s] for s in statuses]
 
     for (v0, g0), (v1, g1) in zip(zip(axis, grades), list(zip(axis, grades))[1:]):
         if lower_is_better:

@@ -1,7 +1,7 @@
 from importlib.metadata import version, PackageNotFoundError
 
 from cdfibenchmark.exceptions import (
-    CDFIBenchmarkError, FDICAPIError, FDICResponseError,
+    CDFIBenchmarkError, FDICAPIError, FDICResponseError, CBLRScheduleError,
 )
 from cdfibenchmark.data.schema import (
     InstitutionProfile, BenchmarkResult,
@@ -35,6 +35,7 @@ except PackageNotFoundError:
 __all__ = [
     "UNKNOWN_VERSION",
     "CDFIBenchmarkError", "FDICAPIError", "FDICResponseError",
+    "CBLRScheduleError",
     "InstitutionProfile", "BenchmarkResult",
     "get_institution", "get_financials",
     "search_institutions", "get_peer_financials",
