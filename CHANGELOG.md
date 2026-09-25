@@ -9,9 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.3] - 2026-09-24
 
-A correction to the Tier 1 leverage grade that 0.3.2 introduced. The
-methodology is `methodology-cblr-period-schedule-v4.2` (hostile-audited before
-any code was written).
+A correction to the Tier 1 leverage grade that 0.3.2 introduced.
 
 **Summary.** This release withdraws Tier 1 grades it cannot support, relabels
 the CBLR line, adds a provenance line stating the date the CBLR schedule was
@@ -20,9 +18,12 @@ statements.** Every refusal reason is a new statement on the report face. The
 reasons for a missing, malformed or non-quarter-end report date, and for a date
 after the verified date, speak about this tool's own scope. The reasons for a
 date before 2020-01-01 and for 2020-06-30 through 2021-12-31 also speak about
-the law: the framework's effective date, the paragraph numbering of the PCA
-citation, and the temporary 12 CFR 324.303. Each is sourced in section 2 of the
-methodology.
+the law: the framework's effective date (84 FR 61776, Nov. 13, 2019: "The
+final rule is effective on January 1, 2020"), the paragraph numbering of the
+PCA citation (12 CFR 324.403(b)(1)(i)(D) is the designation in the CFR
+edition as of 2020-01-01, whose source note adds 84 FR 61803, Nov. 13, 2019,
+to the 2019 edition's), and the temporary 12 CFR 324.303 (85 FR 22924 and
+85 FR 22930, Apr. 23, 2020).
 
 ### Fixed
 
@@ -31,8 +32,9 @@ methodology.
   0.3.2). The framework took effect on January 1, 2020 (84 FR 61776). These
   dates are now not graded, with a reason.
 - **B1/B2. Grades during the 2020-2021 relief period.** From 2020-06-30 through
-  2021-12-31 the level was set by the temporary 12 CFR 324.303 (8% in 2020,
-  greater than 8.5% in 2021), which this release does not encode. These dates
+  2021-12-31 the level was set by the temporary 12 CFR 324.303 (equal to or
+  greater than 8% for 2020-06-30 through 2020-12-31, 85 FR 22924; greater than
+  8.5% for 2021, 85 FR 22930), which this release does not encode. These dates
   are now not graded, with a reason pointing here.
 - **C. `>=` where the rule says "greater than".** 12 CFR 324.12(a)(1) deems an
   electing institution to meet the requirements "if it has a leverage ratio
@@ -87,8 +89,7 @@ stated, because none was measured for this release):
   verified through -> N/A. In 0.3.2, 20260930 and later dates were graded at
   8%. **Those 0.3.2 grades have not been shown to be wrong.** They are
   withdrawn because this release's schedule is verified only through
-  2026-09-22 (coverage), not because they were incorrect. (FDIC does not
-  publish 20260930 data until about November 2026.)
+  2026-09-22 (coverage), not because they were incorrect.
 
 ### Added
 
@@ -147,7 +148,10 @@ stated, because none was measured for this release):
    6.4), and state member banks under the Federal Reserve's (12 CFR 217.12 and
    208.43). This release cites only the FDIC's. It makes no claim about whether
    the levels in those parts match.
-5. **Rendering `peer_count` beside a thin peer cell, which the 0.3.2 entry said
+5. **Under pandas 3, missing values in the string columns of `summary_table()`
+   other than `not_graded_reason` (for example `basis` and `threshold_source`)
+   appear as `NaN`, not `None`.** Test them with `pd.isna`.
+6. **Rendering `peer_count` beside a thin peer cell, which the 0.3.2 entry said
    "belongs in 0.3.3", is deferred and is still a known issue.** 0.3.3 is
    scoped to the CBLR fix.
 

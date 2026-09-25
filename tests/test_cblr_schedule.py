@@ -631,3 +631,84 @@ def test_the_not_graded_helper_in_its_single_reason_cases():
     assert len(only_basis) == 1
     assert only_basis[0].startswith(f"**Not graded:** this value is {ytd}.")
     assert "Separately" not in only_basis[0]
+
+
+# ── fix round 1 (hostile audit 2026-09-24) ───────────────────────────────────
+def test_not_graded_reason_is_none_on_graded_rows_of_a_mixed_frame():
+    """B1. The CHANGELOG documents `None` on graded rows and on every HOUSE
+    row. Under pandas 3 a column mixing None and str is inferred as a string
+    dtype and every None becomes NaN -- in exactly the frames where Tier 1 was
+    refused. A frame with one refused tier1 row and seven graded HOUSE rows
+    must still hold `None` on the HOUSE rows."""
+    import pandas as pd
+    subject = _bank(1, "20200930", 8.2)          # RELIEF: tier1 refused
+    df = summary_table(subject, _peers())
+    tier1 = df[df["metric"] == "Tier 1 Leverage Ratio"]
+    assert len(tier1) == 1 and tier1["not_graded_reason"].iloc[0] == RELIEF(
+        "20200930")
+    house = df[df["metric"] != "Tier 1 Leverage Ratio"]
+    assert len(house) == 7
+    values = list(house["not_graded_reason"])
+    assert all(v is None for v in values), (pd.__version__, values)
+    # The numeric columns keep their dtypes; only this column is object.
+    assert df["not_graded_reason"].dtype == object
+    assert df["institution"].dtype.kind == "f", df["institution"].dtype
+
+
+def test_the_tier1_band_pins_both_operators():
+    """N4 / X4: `Adequate >= 5%` is what the grade does (5.0 is ADEQUATE; the
+    rule reads "5.0 percent or greater"). A `>` there would be a false
+    operator on the report face."""
+    _, block, _ = _render("20250630", 13.2)
+    band = [ln for ln in block.splitlines() if ln.startswith("**Benchmark:**")][0]
+    assert band.startswith(
+        "**Benchmark:** Strong > 9% (a value that rounds to 9.00% is not "
+        "graded) | Adequate >= 5% — "), band
+    assert _result(5.0, "20250630").status == "ADEQUATE"
+
+
+def test_a_verified_through_date_on_a_quarter_end_is_itself_graded(monkeypatch):
+    """X7: BEYOND is `d > LEVELS_VERIFIED_THROUGH`, so LVT itself is graded.
+    Today's LVT (20260922) is not a quarter-end, so NONQ fires first and a
+    `>=` would be invisible; with LVT on a quarter-end it is not."""
+    monkeypatch.setattr(schema, "LEVELS_VERIFIED_THROUGH", "20260630")
+    level, text = schema._cblr_at("20260630")
+    assert level == 9, text
+    level, text = schema._cblr_at("20260930")
+    assert level is None and text.startswith(
+        "This version's CBLR schedule was verified against the CFR as in force "
+        "on 2026-06-30."), text
+
+
+@pytest.mark.parametrize("d", [" 20250630 ", "20250630\n", "\t20250630"],
+                         ids=repr)
+def test_a_whitespace_padded_valid_date_is_graded(d):
+    """N5: `str(report_date).strip()` normalises padding; the date is the
+    same quarter-end and is graded at its level."""
+    assert _cblr_at(d)[0] == 9
+    assert _result(13.2, d).status == "STRONG"
+
+
+def _period_basis_rows():
+    text = layout.SURFACES["README.md"].read_text()
+    header = "| Metric | Computed fallback | Graded? |"
+    assert text.count(header) == 1, "the README period-basis table moved"
+    rows = []
+    for line in text[text.index(header):].splitlines()[2:]:
+        if not line.startswith("|"):
+            break
+        rows.append([c.strip() for c in line.strip("|").split("|")])
+    assert rows, "the README period-basis table has no rows"
+    return rows
+
+
+@layout.needs("README.md")
+def test_the_readme_period_basis_table_does_not_say_tier1_is_always_graded():
+    """B2. 0.3.3 refuses Tier 1 for some report dates and for values that
+    display as the level, so the "Graded?" cell for Tier 1 cannot say
+    "Always" -- the census regex cannot see this row (no CBLR/324/% token)."""
+    tier1 = [r for r in _period_basis_rows() if "Tier 1" in r[0]]
+    assert len(tier1) == 1, tier1
+    graded = tier1[0][2]
+    assert "Always" not in graded, graded
+    assert "Not graded" in graded and "Tier 1 section" in graded, graded

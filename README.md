@@ -210,7 +210,8 @@ and it is **not graded**:
 | NIM | net interest income / **total** assets, YTD | **Never** — the 3.5% threshold is calibrated to `NIMY`, which is over average **earning** assets. A larger denominator biases it low at every period, including Q4. |
 | ROAA / ROAE | YTD net income / **period-end** balances | Only at a Q4 `REPDTE`, where the flow covers the full year. |
 | Efficiency Ratio | `(NONIX - EAMINTAN) / ((INTINC - EINTEXP) + NONII)` | **Always** — numerator and denominator are YTD flows over the same period, so the period cancels exactly. Annualizing it would *introduce* an error. |
-| Tier 1, L/D, NPL, Reserve Coverage | period-end balances only | **Always** — no flow item, no period error. |
+| L/D, NPL, Reserve Coverage | period-end balances only | **Always** — no flow item, no period error. |
+| Tier 1 | period-end balances only | Yes, except the report dates and values listed under **Not graded** in the Tier 1 section below — no flow item, no period error. |
 
 Labels follow the basis. "Return on **Average** Assets (ROAA)" is used only when
 the value is FDIC's published `ROA`; the computed fallback renders as "Return on
@@ -237,8 +238,8 @@ grades against **greater than 9%** at 2020-03-31 and from 2022-03-31 through
 2026-06-30. The level is **greater than 8%** from 2026-07-01. This release's
 schedule was verified against the CFR as in force on **2026-09-22**, so no
 quarter-end report date at the 8% level is graded yet. **The verified date does
-not move by itself. The newest quarter shows N/A on Tier 1 until a release
-extends the verified date.**
+not move by itself. Each quarter after 2026-09-22 shows N/A on Tier 1 until a
+release extends the verified date.**
 
 **Not graded** (the value is shown, the status is N/A, and the report says why):
 

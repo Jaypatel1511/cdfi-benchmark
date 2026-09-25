@@ -636,6 +636,13 @@ def summary_table(
             "peer_count": r.peer_count,
             "basis": r.basis,
             "threshold_source": r.source,
-            "not_graded_reason": r.not_graded_reason,
         })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    # Built as its OWN object-dtype Series, so a graded or HOUSE row holds
+    # `None` on every pandas version. Left to inference, pandas 3 gives a
+    # column mixing None and str a string dtype and turns each None into NaN
+    # -- exactly in the frames where Tier 1 was refused. Only this column is
+    # object; the numeric columns keep the dtypes existing callers rely on.
+    df["not_graded_reason"] = pd.Series(
+        [r.not_graded_reason for r in results], dtype=object, index=df.index)
+    return df
