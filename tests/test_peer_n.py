@@ -554,3 +554,144 @@ def test_a_metric_no_peer_has_is_not_called_withheld_in_either_caveat():
     assert "this report shows no peer median, so it makes none." in n10[0]
     for caveat in p8 + n10:
         assert "withheld" not in caveat, caveat
+
+
+# ── fix round 3 (2026-10-01): S1, S2 -- the "no-median page" rule ───────────
+# A no-median page is one on which no metric renders a **Peer Median:** line:
+# every group of 1-4, and a larger group in which every metric is thin. The
+# rule is keyed on the results, so each gate below includes an all-thin group
+# of 5 or more, which a group-size trigger would miss.
+_NO_VALUE = {f: float("nan") for f in (
+    "total_deposits", "net_loans", "net_income", "interest_income",
+    "interest_expense", "non_interest_income", "non_interest_expense",
+    "total_equity", "tier1_ratio", "gross_loans", "non_current_loans",
+    "loan_loss_allowance", "reported_nim", "reported_roaa", "reported_roae",
+    "reported_efficiency_ratio")}
+
+
+def _all_thin(size, valued=PEER_STAT_MIN_N - 1, **group_kw):
+    """A `size`-peer group in which only `valued` peers have any metric value,
+    so every metric has n = `valued`. The subject is larger than every peer
+    (asset percentile 100), so the size-skew caveat fires."""
+    subject = _bank(1, 30)
+    peers = [_bank(9000 + i, i, **({} if i < valued else _NO_VALUE))
+             for i in range(size)]
+    return subject, _group(peers, subject, **group_kw)
+
+
+_STATUS_HEAD = (
+    "**How to read Status:** Status grades the **Institution** column against "
+    "the fixed thresholds shown on each metric's **Benchmark** line below. It "
+    "does **not** consult the Peer Median, 25th or 75th percentile columns.")
+_STATUS_NO_MEDIAN = _STATUS_HEAD + (
+    " This page shows no peer median or percentile, so it answers only the "
+    "grade question.")
+_STATUS_WITH_MEDIAN = _STATUS_HEAD + (
+    " A metric can grade STRONG while sitting below the peer median, and "
+    "ADEQUATE while sitting outside the peer range entirely. Read the grade "
+    "and the peer columns as two separate questions — this report answers "
+    "both and combines neither.")
+
+
+def _status_note(report):
+    return next(ln for ln in report.splitlines()
+                if ln.startswith("**How to read Status:**"))
+
+
+def test_the_all_thin_fixture_has_the_intended_shape():
+    for size in (7, 19):
+        subject, peers = _all_thin(size)
+        counts = {r.peer_count for r in benchmark_institution(subject, peers)}
+        assert counts == {PEER_STAT_MIN_N - 1}, (size, counts)
+        assert peers.asset_percentile == 100.0
+        assert len(peers) >= PEER_STAT_MIN_N
+
+
+@pytest.mark.parametrize("name,fixture,no_median", [
+    ("3-peer", lambda: _uniform(3), True),
+    ("19-peer-some-thin", _cert16583, False),
+    ("19-peer-all-thin", lambda: _all_thin(19), True),
+], ids=["3-peer", "19-peer-some-thin", "19-peer-all-thin"])
+def test_the_status_note_answers_only_the_questions_the_page_answers(
+        name, fixture, no_median):
+    """S1: on a no-median page the note keeps its first two sentences and
+    says the page answers only the grade question. Keyed on the results: the
+    all-thin 19-peer group gets the new text, the CERT-16583-shaped 19-peer
+    group (thin cells, but medians shown) keeps the old."""
+    subject, peers = fixture()
+    report = generate_report(subject, peers)
+    assert ("**Peer Median:**" not in report) is no_median
+    note = _status_note(report)
+    if no_median:
+        assert note == _STATUS_NO_MEDIAN, note
+        assert "answers both" not in report
+        assert "sitting below the peer median" not in report
+    else:
+        assert note == _STATUS_WITH_MEDIAN, note
+        assert "answers only the grade question" not in report
+
+
+@pytest.mark.parametrize("size", [7, 19])
+def test_an_all_thin_group_s_position_legend_names_no_median(size):
+    """S2-1: the Position legend's "the peer median carries a size bias" was
+    keyed on group size, so an all-thin group of 5 or more still said it."""
+    subject, peers = _all_thin(size)
+    report = generate_report(subject, peers)
+    position = next(ln for ln in report.splitlines() if ln.startswith(
+        "**Institution's Position in the Peer Asset Range:**"))
+    assert position.endswith(_POSITION_LEGEND_SMALL), position
+    assert "carries a size bias" not in report
+
+
+def test_an_all_thin_group_below_the_minimum_gets_the_no_median_caveat():
+    """S2-2: a group of 7 below the requested 10 with every metric thin shows
+    no percentile, so P8 must not say "Percentiles over so few peers"."""
+    subject, peers = _all_thin(7)
+    report = generate_report(subject, peers)
+    assert (f"Peer group has 7 institutions, below the requested minimum of "
+            f"{HOUSE_MIN_PEERS}; this report shows no peer median or "
+            f"percentile (this tool's house minimum for showing them is "
+            f"{PEER_STAT_MIN_N}).") in report
+    assert "Percentiles over so few peers" not in report
+
+
+@pytest.mark.parametrize("size", [7, 19])
+def test_an_all_thin_group_s_size_skew_caveat_names_no_comparison(size):
+    """S2-3: N10's "Comparisons against this group's median carry a size
+    bias." was keyed on group size, so an all-thin group of 5 or more said
+    it about a median the page does not show."""
+    subject, peers = _all_thin(size)
+    joined = " ".join(peers.caveats)
+    assert ("nearly every peer is SMALLER than the institution. Any comparison "
+            "against this group would carry a size bias; this report shows no "
+            "peer median, so it makes none.") in joined, joined
+    assert "Comparisons against this group's median" not in joined
+
+
+_NO_MEDIAN_PAGE_FORBIDDEN = (
+    "answers both", "sitting below the peer median", "carries a size bias",
+    "Comparisons against this group's median", "Percentiles over so few peers",
+    "read the median and percentiles as indicative", "**vs Peer Median:**",
+    "**Peer Median:**",
+)
+
+
+def _rule_pages():
+    return PAGES + [("all-thin-7", *_all_thin(7)), ("all-thin-19", *_all_thin(19)),
+                    ("1-peer", *_uniform(1)), ("empty", *_uniform(0))]
+
+
+@pytest.mark.parametrize("name,subject,peers", _rule_pages(),
+                         ids=[p[0] for p in _rule_pages()])
+def test_a_no_median_page_presupposes_no_median(name, subject, peers):
+    """The rule, as one gate over every page shape: a page that renders no
+    **Peer Median:** line carries none of the sentences that presuppose one,
+    and the group's own test for such a page agrees with the render."""
+    report = generate_report(subject, peers)
+    no_median = "**Peer Median:**" not in report
+    assert peers._shows_no_peer_median is no_median
+    assert generator._shows_no_peer_median(
+        benchmark_institution(subject, peers)) is no_median
+    if no_median:
+        for phrase in _NO_MEDIAN_PAGE_FORBIDDEN:
+            assert phrase not in report, (name, phrase)

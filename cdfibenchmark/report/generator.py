@@ -46,6 +46,19 @@ def _peer_stats_withheld(n) -> bool:
     return 0 < n < PEER_STAT_MIN_N
 
 
+def _shows_no_peer_median(results) -> bool:
+    """True when no metric on the page renders a **Peer Median:** line.
+
+    Keyed on the rendered results, not on the group size (0.3.4): every group
+    of 1-4 is such a page, and so is a larger group in which every metric has
+    fewer than PEER_STAT_MIN_N peers with a value. A sentence that presupposes
+    a peer median must not appear on it. `PeerGroup._shows_no_peer_median` is
+    the same test for the group caveats, which are built before any result.
+    """
+    return not any(not _peer_stats_withheld(r.peer_count)
+                   and not _is_missing(r.peer_median) for r in results)
+
+
 def _peer_stats_withheld_line(n, group_size) -> str:
     """The Metric Detail line that replaces the peer median when n < floor."""
     if n == 0:
@@ -605,16 +618,24 @@ def generate_report(
     # its reserve coverage is 22% of the peer median and below the 25th
     # percentile, and both grade ADEQUATE; CERT 16584's ROAA is below its peer
     # median and grades STRONG. What was missing is the sentence saying so.
-    lines += [
-        "",
+    no_median = _shows_no_peer_median(results)
+    status_note = (
         "**How to read Status:** Status grades the **Institution** column "
         "against the fixed thresholds shown on each metric's **Benchmark** line "
         "below. It does **not** consult the Peer Median, 25th or 75th percentile "
-        "columns. A metric can grade STRONG while sitting below the peer median, "
-        "and ADEQUATE while sitting outside the peer range entirely. Read the "
-        "grade and the peer columns as two separate questions — this report "
-        "answers both and combines neither.",
-    ]
+        "columns.")
+    # On a page with no peer median, "sitting below the peer median" points at
+    # a median the page lacks and "this report answers both" is false (0.3.4).
+    if no_median:
+        status_note += (" This page shows no peer median or percentile, so it "
+                        "answers only the grade question.")
+    else:
+        status_note += (
+            " A metric can grade STRONG while sitting below the peer median, "
+            "and ADEQUATE while sitting outside the peer range entirely. Read "
+            "the grade and the peer columns as two separate questions — this "
+            "report answers both and combines neither.")
+    lines += ["", status_note]
 
     lines += [
         "",
@@ -703,11 +724,12 @@ def generate_report(
                 and p.total_assets < peers.subject_assets
             )
             known = sum(1 for p in peers if not _is_missing(p.total_assets))
-            # Below PEER_STAT_MIN_N the report shows no peer median (some are
-            # withheld, some were never computed because no peer has a value),
-            # so "the peer median carries a size bias" would describe a median
-            # the page does not contain (0.3.4).
-            if len(peers) < PEER_STAT_MIN_N:
+            # On a page with no peer median (some are withheld, some were
+            # never computed because no peer has a value) "the peer median
+            # carries a size bias" would describe a median the page does not
+            # contain (0.3.4). That is every group of 1-4, and any larger
+            # group in which every metric is below PEER_STAT_MIN_N.
+            if no_median:
                 legend = ("50 means the group brackets the institution; 0 or "
                           "100 means it does not. This report shows no peer "
                           "median, so it makes no comparison that a size bias "

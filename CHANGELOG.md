@@ -13,15 +13,15 @@ Per-metric peer n on the report face, and a floor below which the report
 withholds a metric's peer statistics.
 
 **Summary.** The report printed each metric's peer median and percentiles with
-no n, beside a group count that did not describe them. A peer has no value for
-a metric when the metric is undefined for it (a zero denominator), when a field
+no n, beside a group count that did not describe them. A peer has no value for a
+metric when the metric is undefined for it (a zero denominator), when a field
 was not reported, or when this tool refused the published value; the statistic
 is computed over the peers that have one. At `20260630`, CERT 16583's group of
 19 had a value for reserve coverage at 1 peer, for NPL ratio at 4 and for
-loans-to-deposits at 7, and the page gave the group count, 19, three times
-(Peer Group Size, Peer Count, Distinct Institutions). 0.3.4 prints n wherever a
-peer statistic appears and withholds the median, percentiles and vs-median line
-when fewer than 5 peers have a value.
+loans-to-deposits at 7, and the page gave the group count, 19, three times (Peer
+Group Size, Peer Count, Distinct Institutions). 0.3.4 prints n wherever a peer
+statistic appears and withholds the median, percentiles and vs-median line when
+1 to 4 peers have a value (with no peer value they read N/A).
 **No grade changes**: Status never read a peer value, and still does not.
 `summary_table()` keeps every numeric value on every row and gains one column
 (11 -> 12). Two text columns change wording on some rows: `threshold_source`
@@ -63,8 +63,8 @@ rows dated 2020-06-30 through 2021-12-31 (see Fixed).
   percentile of its group by assets) now reads "Any comparison against this
   group would carry a size bias; this report shows no peer median, so it makes
   none." instead of "Comparisons against this group's median carry a size
-  bias.", which groups of 5 or more keep. The no-peer caveat now says the Peers (n)
-  column reads 0, where it said every peer column is N/A.
+  bias.", which groups of 5 or more keep. The no-peer caveat now says the
+  Peers (n) column reads 0, where it said every peer column is N/A.
 - **"in a an unrecorded asset window"** on the sample peer group's selection
   basis.
 - **"none applied at this report date" when there is no usable report date.**
@@ -117,6 +117,25 @@ rows dated 2020-06-30 through 2021-12-31 (see Fixed).
   "0 or 100 means it does not. This report shows no peer median, so it makes
   no comparison that a size bias could distort." instead of "…, and the peer
   median carries a size bias.", which groups of 5 or more keep.
+- **How to read Status:** on a page that shows no peer median (every metric
+  has fewer than 5 peers with a value: every group of 1-4, and a larger group
+  whose metrics are all thin), the note keeps its first two sentences and then
+  reads "This page shows no peer median or percentile, so it answers only the
+  grade question." instead of "A metric can grade STRONG while sitting below
+  the peer median, … — this report answers both and combines neither." Every
+  other page is unchanged.
+- The Position line's "This report shows no peer median, …" ending is keyed on
+  the page, not the group size: a group of 5 or more in which every metric has
+  fewer than 5 peers with a value also gets it, instead of "…, and the peer
+  median carries a size bias."
+- The below-minimum caveat "…; this report shows no peer median or percentile
+  …" also applies to a group of 5 or more below the requested minimum in which
+  every metric has fewer than 5 peers with a value, instead of "Percentiles
+  over so few peers are not a reliable benchmark".
+- The size-skew caveat's "Any comparison against this group would carry a size
+  bias; this report shows no peer median, so it makes none." also applies to a
+  group of 5 or more in which every metric has fewer than 5 peers with a value,
+  instead of "Comparisons against this group's median carry a size bias."
 - The missing/malformed-date Benchmark line, `threshold_source` prefix and date
   lines (see Fixed). The 0.3.3 prefix `none applied at this report date: ` is
   unchanged for every other refused date.

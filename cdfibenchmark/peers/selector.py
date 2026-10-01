@@ -2,8 +2,9 @@
 Peer group selection logic for CDFI benchmarking.
 """
 from cdfibenchmark.data.schema import (
-    InstitutionProfile, ASSET_BUCKETS, _is_missing, PEER_STAT_MIN_N,
+    InstitutionProfile, ASSET_BUCKETS, _is_missing, PEER_STAT_MIN_N, BENCHMARKS,
 )
+from cdfibenchmark.metrics.calculator import compute_peer_metrics
 from cdfibenchmark.data.fdic import get_peer_financials, FDIC_MAX_LIMIT
 from cdfibenchmark.exceptions import FDICResponseError
 
@@ -184,6 +185,21 @@ class PeerGroup(list):
         return len(self) < self.min_peers
 
     @property
+    def _shows_no_peer_median(self) -> bool:
+        """True when the report on this group shows no peer median at all.
+
+        That is, no metric has PEER_STAT_MIN_N peers with a value: the same
+        per-metric count `benchmark_institution` takes as `peer_count`, so this
+        agrees with `generator._shows_no_peer_median` on the rendered results
+        (0.3.4). True for every group of 1-4, and for a larger group in which
+        every metric is thin.
+        """
+        df = compute_peer_metrics(self)
+        return not any(metric in df.columns
+                       and df[metric].notna().sum() >= PEER_STAT_MIN_N
+                       for metric in BENCHMARKS)
+
+    @property
     def caveats(self) -> list:
         """Human-readable statements of every way this group is not ideal.
 
@@ -213,10 +229,11 @@ class PeerGroup(list):
                 f"own values against fixed thresholds only. Check that the "
                 f"report date is a quarter-end on which institutions filed."
             )
-        elif self.below_min_peers and len(self) < PEER_STAT_MIN_N:
-            # Below PEER_STAT_MIN_N every metric's n is too (n <= group size),
-            # so the report withholds every median and percentile. "Percentiles
-            # over so few peers are not a reliable benchmark" would describe
+        elif self.below_min_peers and self._shows_no_peer_median:
+            # No metric has PEER_STAT_MIN_N peers with a value -- always so
+            # below PEER_STAT_MIN_N (n <= group size), and possible above it --
+            # so the report shows no median or percentile. "Percentiles over
+            # so few peers are not a reliable benchmark" would describe
             # percentiles the document does not contain -- the n=0 defect
             # above, one step up (0.3.4).
             n = len(self)
@@ -251,10 +268,11 @@ class PeerGroup(list):
         pct = self.asset_percentile
         if pct is not None and (pct <= 10 or pct >= 90):
             side = "LARGER" if pct <= 10 else "SMALLER"
-            # Below PEER_STAT_MIN_N the report withholds every peer median, so
-            # "comparisons against this group's median" would describe
-            # comparisons the page does not contain (0.3.4).
-            if len(self) < PEER_STAT_MIN_N:
+            # When the report shows no peer median (every group of 1-4, and
+            # any larger group in which every metric is thin), "comparisons
+            # against this group's median" would describe comparisons the
+            # page does not contain (0.3.4).
+            if self._shows_no_peer_median:
                 bias = ("Any comparison against this group would carry a size "
                         "bias; this report shows no peer median, so it makes "
                         "none.")
