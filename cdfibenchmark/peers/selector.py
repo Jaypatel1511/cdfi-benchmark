@@ -1,7 +1,9 @@
 """
 Peer group selection logic for CDFI benchmarking.
 """
-from cdfibenchmark.data.schema import InstitutionProfile, ASSET_BUCKETS, _is_missing
+from cdfibenchmark.data.schema import (
+    InstitutionProfile, ASSET_BUCKETS, _is_missing, PEER_STAT_MIN_N,
+)
 from cdfibenchmark.data.fdic import get_peer_financials, FDIC_MAX_LIMIT
 from cdfibenchmark.exceptions import FDICResponseError
 
@@ -135,7 +137,9 @@ class PeerGroup(list):
         it is: a bound on the candidate pool.
         """
         tol = self.asset_tolerance
-        tol_txt = f"+/-{tol * 100:.0f}%" if tol is not None else "an unrecorded"
+        # The article lives in `tol_txt` (0.3.4): the sentence below hard-coded
+        # "in a {tol_txt}", which read "in a an unrecorded" on the sample path.
+        tol_txt = f"a +/-{tol * 100:.0f}%" if tol is not None else "an unrecorded"
         universe = (f"{self.universe_size:,}" if self.universe_size is not None
                     else "an unrecorded number of")
         span = self.asset_span
@@ -151,7 +155,7 @@ class PeerGroup(list):
         return (
             f"the {len(self)} banks NEAREST the subject in total assets. "
             f"{breadth}"
-            f"They were selected from a candidate pool of {universe} banks in a "
+            f"They were selected from a candidate pool of {universe} banks in "
             f"{tol_txt} asset window at "
             f"{self.target_report_date or 'an unpinned period'}; that window "
             f"bounds the pool, and for most subjects it is wide enough that it "
@@ -207,6 +211,19 @@ class PeerGroup(list):
                 f"has been performed. Any Status shown grades the institution's "
                 f"own values against fixed thresholds only. Check that the "
                 f"report date is a quarter-end on which institutions filed."
+            )
+        elif self.below_min_peers and len(self) < PEER_STAT_MIN_N:
+            # Below PEER_STAT_MIN_N every metric's n is too (n <= group size),
+            # so the report withholds every median and percentile. "Percentiles
+            # over so few peers are not a reliable benchmark" would describe
+            # percentiles the document does not contain -- the n=0 defect
+            # above, one step up (0.3.4).
+            n = len(self)
+            out.append(
+                f"Peer group has {n} institution{'s' if n != 1 else ''}, below "
+                f"the requested minimum of {self.min_peers}; every peer median "
+                f"and percentile in this report is withheld (this tool's house "
+                f"minimum for showing them is {PEER_STAT_MIN_N})."
             )
         elif self.below_min_peers:
             out.append(

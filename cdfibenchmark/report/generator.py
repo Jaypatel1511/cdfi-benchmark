@@ -8,11 +8,82 @@ from cdfibenchmark.data.schema import (
     InstitutionProfile, BenchmarkResult, BENCHMARKS, benchmark_for, _is_missing,
     BASIS_FDIC, GRADEABLE_BASES, BASIS_REJECTED_IMPLAUSIBLE,
     asset_bucket_bounds_text, DISPLAY_PCT_DP, fmt_pct_digits,
-    LEVELS_VERIFIED_THROUGH, _iso,
+    LEVELS_VERIFIED_THROUGH, _iso, PEER_STAT_MIN_N, _unusable_report_date,
 )
 from cdfibenchmark.metrics.calculator import (
     compute_peer_metrics, benchmark_institution, rank_institution
 )
+from cdfibenchmark.peers.selector import HOUSE_MIN_PEERS
+
+
+#: Appended to the group-size count wherever it is printed (0.3.4). The group
+#: size is how many institutions were SELECTED; no statistic on the page is
+#: computed over that many unless every peer has a value for the metric.
+_GROUP_SIZE_CLAUSE = (
+    " — each metric's peer statistics use only the peers with a value for "
+    "that metric; see Peers (n)"
+)
+
+#: Why a peer can lack a value, said once wherever a count is withheld.
+_NO_VALUE_REASONS = (
+    "A peer has no value when the metric is undefined for it (a zero "
+    "denominator, e.g. reserve coverage at a bank with no noncurrent loans), "
+    "when a field was not reported, or when this tool refused the published "
+    "value."
+)
+
+
+def _peers_word(n) -> str:
+    return "peer" if n == 1 else "peers"
+
+
+def _peer_stats_withheld(n) -> bool:
+    """True when the page withholds a metric's median, percentiles and vs line.
+
+    `n` is the per-metric count (`BenchmarkResult.peer_count`). At n = 0 there
+    is nothing to withhold -- every statistic is already None.
+    """
+    return 0 < n < PEER_STAT_MIN_N
+
+
+def _peer_stats_withheld_line(n, group_size) -> str:
+    """The Metric Detail line that replaces the peer median when n < floor."""
+    if n == 0:
+        head = ("**Peer statistics:** none — no peer in this group has a "
+                "value for this metric.")
+    else:
+        head = (f"**Peer statistics:** withheld — only {n} of the {group_size} "
+                f"peers in this group have a value for this metric, below this "
+                f"tool's house minimum of {PEER_STAT_MIN_N} for showing a "
+                f"median or percentiles.")
+    return f"{head} {_NO_VALUE_REASONS}"
+
+
+def _thin_cell_line(n, group_size):
+    """The thin-cell caveat, or None. Keyed to the HOUSE minimum, never to the
+    caller's `min_peers`: a caller's minimum has its own group caveat."""
+    if not PEER_STAT_MIN_N <= n < HOUSE_MIN_PEERS:
+        return None
+    return (f"**Thin peer cell:** {n} of {group_size} peers have a value for "
+            f"this metric (this tool's house minimum for a peer group is "
+            f"{HOUSE_MIN_PEERS}); read the median and percentiles as "
+            f"indicative.")
+
+
+def _report_date_text(report_date) -> str:
+    """A report date as the page prints it.
+
+    MISSING renders `not stated` and MALFORMED the raw value in quotes, by the
+    schedule's own classification (`_unusable_report_date`), so "  " and
+    "nan" are described the same way here as in the Tier 1 refusal. Through
+    0.3.3 a missing date printed `None`, blank, or `N/A` depending on the line.
+    """
+    unusable = _unusable_report_date(report_date)
+    if unusable == "MISSING":
+        return "not stated"
+    if unusable == "MALFORMED":
+        return f'"{report_date}"'
+    return str(report_date)
 
 
 def _fmt_pct(value) -> str:
@@ -158,7 +229,18 @@ def _relative_gap_reason(peer_median_raw) -> str:
             f"already rounded away")
 
 
-def _vs_median_line(vs_printed, peer_median_raw) -> str:
+def _vs_median_line(vs_printed, peer_median_raw, n) -> str:
+    """`_vs_median_body`, followed by how many peers the median is over.
+
+    The suffix goes at the END of every form of the line (0.3.4), after any
+    relative figure or withheld-relative reason, so the line still opens with
+    the pp gap that `_VS_LINE` parses.
+    """
+    return (f"{_vs_median_body(vs_printed, peer_median_raw)} "
+            f"(vs a median of {n} {_peers_word(n)} with a value)")
+
+
+def _vs_median_body(vs_printed, peer_median_raw) -> str:
     """The comparison sentence, with the unit of every number on its face.
 
     Measured on the 0.3.1 artifact (CERT 34352 @ 20260630), the old line was
@@ -259,7 +341,11 @@ def _threshold_line(metric: str, report_date: str = None) -> str:
     """
     benchmark = benchmark_for(metric, report_date)
     if benchmark.get("refusal"):
-        return ("**Benchmark:** none applied at this report date — no CBLR "
+        # MISSING / MALFORMED: there is no "this report date" to point at.
+        where = ("none applied — this report has no usable report date"
+                 if _unusable_report_date(report_date)
+                 else "none applied at this report date")
+        return (f"**Benchmark:** {where} — no CBLR "
                 "qualifying level (12 CFR 324.12) or PCA leverage level "
                 "(12 CFR 324.403) is applied; the reason is stated under "
                 "**Not graded** below")
@@ -427,7 +513,7 @@ def _provenance_block(institution, peers) -> list:
         )
 
     lines += [
-        f"**Call Report Period:** {institution.report_date or 'N/A'} — the "
+        f"**Call Report Period:** {_report_date_text(institution.report_date)} — the "
         f"FDIC reporting period these figures describe. This is **not** the "
         f"date the data was retrieved, and not the date this report was "
         f"generated; both of those are stated above.",
@@ -454,8 +540,9 @@ def generate_report(
         f"**Location:** {institution.city}, {institution.state}",
         f"**Total Assets:** {_fmt_assets_mm(institution.total_assets_mm)}",
         _asset_bucket_line(institution),
-        f"**Report Date:** {institution.report_date}",
-        f"**Peer Group Size:** {len(peers)} institutions",
+        f"**Report Date:** {_report_date_text(institution.report_date)}",
+        f"**Peer Group Size:** {len(peers)} institutions selected"
+        f"{_GROUP_SIZE_CLAUSE}",
         _peer_period_line(peers),
         "",
     ]
@@ -474,16 +561,20 @@ def generate_report(
         "",
         "## Performance Summary",
         "",
-        "| Metric | Institution | Peer Median | 25th Pctile | 75th Pctile | Status |",
-        "|--------|-------------|-------------|-------------|-------------|--------|",
+        "| Metric | Institution | Peer Median | 25th Pctile | 75th Pctile | Peers (n) | Status |",
+        "|--------|-------------|-------------|-------------|-------------|-----------|--------|",
     ]
 
     for result in results:
         label = _metric_label(result.metric, result.basis)
         inst_val = _fmt_pct(result.institution_value)
-        median = _fmt_pct(result.peer_median)
-        p25 = _fmt_pct(result.peer_25th)
-        p75 = _fmt_pct(result.peer_75th)
+        # `withheld`, not `—`: the em-dash already means N/A in Status.
+        if _peer_stats_withheld(result.peer_count):
+            median = p25 = p75 = "withheld"
+        else:
+            median = _fmt_pct(result.peer_median)
+            p25 = _fmt_pct(result.peer_25th)
+            p75 = _fmt_pct(result.peer_75th)
         status_emoji = {
             "STRONG": "✅ STRONG",
             "ADEQUATE": "⚠️ ADEQUATE",
@@ -492,7 +583,8 @@ def generate_report(
         }.get(result.status, result.status)
 
         lines.append(
-            f"| {label} | {inst_val} | {median} | {p25} | {p75} | {status_emoji} |"
+            f"| {label} | {inst_val} | {median} | {p25} | {p75} | "
+            f"{result.peer_count} | {status_emoji} |"
         )
 
     # The Status column sits beside three peer columns and reads as though it
@@ -530,15 +622,24 @@ def generate_report(
 
         if not _is_missing(result.institution_value):
             lines.append(f"**Institution Value:** {_fmt_pct(result.institution_value)}")
-        if not _is_missing(result.peer_median):
-            lines.append(f"**Peer Median:** {_fmt_pct(result.peer_median)}")
+        n = result.peer_count
+        withheld = _peer_stats_withheld(n)
+        if not withheld and not _is_missing(result.peer_median):
+            lines.append(
+                f"**Peer Median:** {_fmt_pct(result.peer_median)} "
+                f"(n = {n} {_peers_word(n)} with a value for this metric)")
         vs_printed = _printed_vs_median(result)
-        if not _is_missing(vs_printed):
+        if not withheld and not _is_missing(vs_printed):
             # The RAW median, not the rounded one: `_relative_gap_reason`
             # cannot tell a zero median from one that rounds to zero without
             # it, and those are different facts. The RATIO is still taken
             # against the rounded value, inside `_vs_median_line`.
-            lines.append(_vs_median_line(vs_printed, result.peer_median))
+            lines.append(_vs_median_line(vs_printed, result.peer_median, n))
+        if withheld or n == 0:
+            lines.append(_peer_stats_withheld_line(n, len(peers)))
+        thin = _thin_cell_line(n, len(peers))
+        if thin:
+            lines.append(thin)
 
         if result.basis:
             lines.append(f"**Basis:** {result.basis}")
@@ -574,7 +675,7 @@ def generate_report(
     ]
 
     peer_df = compute_peer_metrics(peers)
-    lines.append(f"**Peer Count:** {len(peers)}")
+    lines.append(f"**Institutions Selected:** {len(peers)}{_GROUP_SIZE_CLAUSE}")
     if "total_assets_mm" in peer_df.columns:
         lines.append(
             f"**Peer Asset Range:** "
@@ -645,4 +746,11 @@ def summary_table(
     # object; the numeric columns keep the dtypes existing callers rely on.
     df["not_graded_reason"] = pd.Series(
         [r.not_graded_reason for r in results], dtype=object, index=df.index)
+    # Same construction, same reason (0.3.4): `None` must stay `None`. The row's
+    # numeric values are NOT withheld -- `peer_count` is already in the frame,
+    # and turning a correct present number into None would be a contract
+    # change. The column says what the rendered report does instead.
+    df["report_withholds_peer_stats"] = pd.Series(
+        [r.report_withholds_peer_stats for r in results], dtype=object,
+        index=df.index)
     return df

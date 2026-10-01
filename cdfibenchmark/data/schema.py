@@ -137,6 +137,19 @@ HOUSE_NPL_WARNING = 3.0
 HOUSE_RESERVE_COVERAGE_GOOD = 100
 HOUSE_RESERVE_COVERAGE_WARNING = 50
 
+# The fewest peers WITH A VALUE FOR A METRIC over which the report shows that
+# metric's peer median, percentiles and vs-median line (0.3.4). Below it they
+# are withheld, with n stated. A per-metric count, not the group size: a peer
+# whose ratio is undefined (a zero denominator), unreported or refused has no
+# value, and measured at 20260630 CERT 16583's 19-peer group left reserve
+# coverage with ONE such peer -- the page printed its 60.24% as "Peer Median"
+# beside "Peer Count: 19". Why 5: at n <= 4 the quartiles are interpolations
+# and the median has at most one observation on each side; at n = 5 all three
+# are actual observations. Interpolation recurs above 5 (n = 6, 7, 8, 10), so 5
+# is not the point where it stops. A house judgment, disclosed as one; not in
+# `__all__`.
+PEER_STAT_MIN_N = 5
+
 # The CBLR qualifying leverage level, BY THE PERIOD IT IS IN FORCE FOR.
 #
 # HISTORY (0.3.2, 2026-09-09). This was one flat string: "12 CFR 324.12 (CBLR
@@ -325,6 +338,27 @@ _check_cblr_schedule(CBLR_LEVELS, CBLR_RELIEF_REFUSED, LEVELS_VERIFIED_THROUGH,
 #: reason is never read as a citation.
 _REFUSED_SOURCE_PREFIX = "none applied at this report date: "
 
+#: The same prefix when there IS no usable report date (MISSING / MALFORMED):
+#: "at this report date" points at a date the report does not have (0.3.4).
+_NO_DATE_SOURCE_PREFIX = "none applied — this report has no usable report date: "
+
+
+def _unusable_report_date(report_date):
+    """"MISSING", "MALFORMED", or None for a date `_cblr_at` can read.
+
+    `_cblr_at`'s own predicate, factored out so the Benchmark line, the
+    `threshold_source` prefix and the rendered dates classify a report date
+    exactly as the schedule does: strip; "" or "None" is MISSING; anything
+    else that is not an 8-digit calendar date is MALFORMED. So "  " and "nan"
+    land in the same class everywhere.
+    """
+    d = None if report_date is None else str(report_date).strip()
+    if d is None or d in ("", "None"):
+        return "MISSING"
+    if not _parses(d):
+        return "MALFORMED"
+    return None
+
 #: The display-equality refusal (methodology v4.2 section 6). One wording, true
 #: on the report face, in `summary_table` and in the README.
 _EQUAL_REASON = (
@@ -348,15 +382,16 @@ def _cblr_at(report_date):
 
     An attested text names no date except inside its own citation.
     """
+    unusable = _unusable_report_date(report_date)
     d = None if report_date is None else str(report_date).strip()
-    if d is None or d in ("", "None"):
+    if unusable == "MISSING":
         return None, (
             "This report carries no report date (REPDTE), so the period its "
             "Tier 1 leverage ratio describes is unknown. The CBLR qualifying "
             "level (12 CFR 324.12) depends on the period, so none is applied "
             "and this value is not graded."
         )
-    if not _parses(d):
+    if unusable == "MALFORMED":
         return None, (
             f"The report date {d!r} is not a calendar date in YYYYMMDD form, "
             f"so the period this value describes cannot be established. No "
@@ -388,7 +423,9 @@ def _cblr_at(report_date):
             f"cdfi-benchmark does not encode. No CBLR qualifying level is "
             f"applied at {iso} and this value is not graded. The PCA leverage "
             f"leg is withheld too, so that a partial grade is not read as a "
-            f"full one. See CHANGELOG.md, section [0.3.3]."
+            f"full one. See CHANGELOG.md, section [0.3.3], at "
+            f"https://github.com/Jaypatel1511/cdfi-benchmark/blob/v0.3.3/"
+            f"CHANGELOG.md."
         )
     if d > LEVELS_VERIFIED_THROUGH:
         return None, (
@@ -425,7 +462,8 @@ def benchmark_for(metric: str, report_date: str = None) -> dict:
     ``good_exclusive=True`` (every attested row is a "greater than" row). A
     refused date gets ``good=None, warning=None``, a `refusal` reason, and a
     `source` that is that reason behind the prefix "none applied at this report
-    date: " -- see `_cblr_at`.
+    date: " -- or, when the date is MISSING or MALFORMED, "none applied — this
+    report has no usable report date: " (0.3.4) -- see `_cblr_at`.
 
     This is the single place that answers "which threshold applies", so a grade
     and the Benchmark line rendered beside it cannot disagree about it.
@@ -435,8 +473,10 @@ def benchmark_for(metric: str, report_date: str = None) -> dict:
         return config
     level, text = _cblr_at(report_date)
     if level is None:
+        prefix = (_NO_DATE_SOURCE_PREFIX if _unusable_report_date(report_date)
+                  else _REFUSED_SOURCE_PREFIX)
         return {**config, "good": None, "warning": None,
-                "source": _REFUSED_SOURCE_PREFIX + text, "refusal": text}
+                "source": prefix + text, "refusal": text}
     return {**config, "good": level, "source": f"{text}; {_PCA}",
             "good_exclusive": True}
 
@@ -992,6 +1032,35 @@ class BenchmarkResult:
     #: Benchmark line cannot resolve to different bands. A date the schedule
     #: refuses (see `_cblr_at`) yields N/A with `not_graded_reason`.
     report_date: Optional[str] = None
+    #: How many institutions the peer group holds -- `len(peers)` as passed to
+    #: `benchmark_institution`, which sets it (0.3.4). `peer_count` is the
+    #: per-metric n (peers with a value for this metric) and can be far
+    #: smaller. Trailing and defaulted, so a directly constructed result is
+    #: still valid; None means "not recorded".
+    peer_group_size: Optional[int] = None
+
+    @property
+    def report_withholds_peer_stats(self) -> Optional[str]:
+        """Why the rendered report withholds this metric's peer statistics, or None.
+
+        Set when ``0 < peer_count < PEER_STAT_MIN_N``. The numeric fields are
+        NOT withheld here -- they are computed over those few peers and stay
+        on the result; this says that the page does not show them. None at
+        n = 0 (there is nothing to withhold) and at n >= PEER_STAT_MIN_N.
+        """
+        n = self.peer_count
+        if not n or n >= PEER_STAT_MIN_N:
+            return None
+        if self.peer_group_size is not None:
+            have = f"only {n} of the {self.peer_group_size} peers have"
+        else:
+            have = f"only {n} peer{'s have' if n != 1 else ' has'}"
+        return (
+            f"The rendered report withholds this row's peer median, "
+            f"percentiles and vs-median: {have} a value for this metric, "
+            f"below this tool's house minimum of {PEER_STAT_MIN_N}. The values "
+            f"in this row are computed over those {n} peer{'s' if n != 1 else ''}."
+        )
 
     @property
     def not_graded_reason(self) -> Optional[str]:
