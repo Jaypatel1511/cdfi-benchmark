@@ -76,7 +76,7 @@ def test_report_discloses_an_undersized_peer_group(q1_institution):
     # 0.3.4 (G-P10): at 3 peers every statistic is withheld, so no sentence
     # on the page may assert that percentiles are present.
     assert "Percentiles over so few peers" not in report
-    assert "every peer median and percentile in this report is withheld" in report
+    assert "this report shows no peer median or percentile" in report
     assert "**Peer Median:**" not in report
     assert "**vs Peer Median:**" not in report
 

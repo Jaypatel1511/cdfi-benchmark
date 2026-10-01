@@ -703,13 +703,24 @@ def generate_report(
                 and p.total_assets < peers.subject_assets
             )
             known = sum(1 for p in peers if not _is_missing(p.total_assets))
+            # Below PEER_STAT_MIN_N the report shows no peer median (some are
+            # withheld, some were never computed because no peer has a value),
+            # so "the peer median carries a size bias" would describe a median
+            # the page does not contain (0.3.4).
+            if len(peers) < PEER_STAT_MIN_N:
+                legend = ("50 means the group brackets the institution; 0 or "
+                          "100 means it does not. This report shows no peer "
+                          "median, so it makes no comparison that a size bias "
+                          "could distort.")
+            else:
+                legend = ("50 means the group brackets the institution; 0 or "
+                          "100 means it does not, and the peer median carries "
+                          "a size bias.")
             lines.append(
                 f"**Institution's Position in the Peer Asset Range:** "
                 f"{_fmt_assets_mm(institution.total_assets_mm)} — "
                 f"percentile {percentile:g} of its own peer group "
-                f"({below} of {known} peers are smaller). 50 means the group "
-                f"brackets the institution; 0 or 100 means it does not, and the "
-                f"peer median carries a size bias."
+                f"({below} of {known} peers are smaller). {legend}"
             )
     basis = getattr(peers, "selection_basis", None)
     if basis:

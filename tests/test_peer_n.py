@@ -417,9 +417,9 @@ def test_a_group_below_the_floor_says_every_statistic_is_withheld(k):
     report = generate_report(subject, peers)
     word = "institution" if k == 1 else "institutions"
     assert (f"Peer group has {k} {word}, below the requested minimum of "
-            f"{HOUSE_MIN_PEERS}; every peer median and percentile in this "
-            f"report is withheld (this tool's house minimum for showing them "
-            f"is {PEER_STAT_MIN_N}).") in report
+            f"{HOUSE_MIN_PEERS}; this report shows no peer median or "
+            f"percentile (this tool's house minimum for showing them is "
+            f"{PEER_STAT_MIN_N}).") in report
     assert "Percentiles over so few peers" not in report
     assert "**Peer Median:**" not in report
     for row in _summary_cells(report).values():
@@ -501,10 +501,56 @@ def test_the_size_skew_caveat_names_only_comparisons_the_page_makes(k):
             "assets: nearly every peer is SMALLER than the institution. ")
     if k < PEER_STAT_MIN_N:
         assert (lead + "Any comparison against this group would carry a size "
-                "bias; this report withholds every peer median, so it makes "
+                "bias; this report shows no peer median, so it makes "
                 "none.") in joined, joined
         assert "Comparisons against this group's median" not in joined
     else:
         assert (lead + "Comparisons against this group's median carry a size "
                 "bias.") in joined, joined
         assert "makes none" not in joined
+
+
+# ── fix round 2 (2026-09-30): R1-R3, "this report shows no peer median" ──────
+_POSITION_LEGEND_SMALL = (
+    "50 means the group brackets the institution; 0 or 100 means it does not. "
+    "This report shows no peer median, so it makes no comparison that a size "
+    "bias could distort.")
+_POSITION_LEGEND = (
+    "50 means the group brackets the institution; 0 or 100 means it does not, "
+    "and the peer median carries a size bias.")
+
+
+@pytest.mark.parametrize("k", [3, 7])
+def test_the_position_legend_names_only_a_median_the_page_shows(k):
+    """R1: below PEER_STAT_MIN_N the page shows no peer median, so the
+    Position line's legend must not say the median carries a size bias."""
+    subject, peers = _uniform(k)
+    report = generate_report(subject, peers)
+    position = next(ln for ln in report.splitlines() if ln.startswith(
+        "**Institution's Position in the Peer Asset Range:**"))
+    if k < PEER_STAT_MIN_N:
+        assert position.endswith(_POSITION_LEGEND_SMALL), position
+        assert "carries a size bias" not in report
+        assert "the peer median carries" not in report
+    else:
+        assert position.endswith(_POSITION_LEGEND), position
+        assert "This report shows no peer median" not in report
+
+
+def test_a_metric_no_peer_has_is_not_called_withheld_in_either_caveat():
+    """R2/R3: in a group of 3 where one metric has n = 0, nothing is withheld
+    for that metric (it was never computed), so neither group caveat may say
+    "withheld"."""
+    subject, peers = _reserve_n(0, size=3)
+    results = benchmark_institution(subject, peers)
+    reserve = next(r for r in results
+                   if r.metric == "reserve_coverage")
+    assert reserve.peer_count == 0
+    caveats = peers.caveats
+    p8 = [c for c in caveats if "below the requested minimum" in c]
+    n10 = [c for c in caveats if "percentile of its own peer group" in c]
+    assert len(p8) == 1 and len(n10) == 1, caveats
+    assert "this report shows no peer median or percentile" in p8[0]
+    assert "this report shows no peer median, so it makes none." in n10[0]
+    for caveat in p8 + n10:
+        assert "withheld" not in caveat, caveat

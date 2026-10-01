@@ -222,9 +222,9 @@ class PeerGroup(list):
             n = len(self)
             out.append(
                 f"Peer group has {n} institution{'s' if n != 1 else ''}, below "
-                f"the requested minimum of {self.min_peers}; every peer median "
-                f"and percentile in this report is withheld (this tool's house "
-                f"minimum for showing them is {PEER_STAT_MIN_N})."
+                f"the requested minimum of {self.min_peers}; this report shows "
+                f"no peer median or percentile (this tool's house minimum for "
+                f"showing them is {PEER_STAT_MIN_N})."
             )
         elif self.below_min_peers:
             out.append(
@@ -256,8 +256,8 @@ class PeerGroup(list):
             # comparisons the page does not contain (0.3.4).
             if len(self) < PEER_STAT_MIN_N:
                 bias = ("Any comparison against this group would carry a size "
-                        "bias; this report withholds every peer median, so it "
-                        "makes none.")
+                        "bias; this report shows no peer median, so it makes "
+                        "none.")
             else:
                 bias = ("Comparisons against this group's median carry a size "
                         "bias.")

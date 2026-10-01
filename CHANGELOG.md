@@ -53,15 +53,17 @@ rows dated 2020-06-30 through 2021-12-31 (see Fixed).
 - **The group count read as each statistic's n.** "Peer Group Size: N
   institutions" and "Peer Count: N" are relabelled (see Changed).
 - **A group caveat describing percentiles the page does not contain.** For a
-  group smaller than the requested minimum and smaller than 5, every statistic
-  is now withheld, so the caveat says that instead of "Percentiles over so few
-  peers are not a reliable benchmark". A group of 5 or more below the requested
-  minimum keeps that sentence. In any group of 1-4, the size-skew caveat
-  (subject at or below the 10th, or at or above the 90th, percentile of its
-  group by assets) now reads "Any comparison against this group would carry a
-  size bias; this report withholds every peer median, so it makes none."
-  instead of "Comparisons against this group's median carry a size bias.",
-  which groups of 5 or more keep. The no-peer caveat now says the Peers (n)
+  group smaller than the requested minimum and smaller than 5, the page shows
+  no peer median or percentile (each is withheld, or N/A where no peer has a
+  value), so the caveat now reads "…; this report shows no peer median or
+  percentile (this tool's house minimum for showing them is 5)." instead of
+  "Percentiles over so few peers are not a reliable benchmark". A group of 5 or
+  more below the requested minimum keeps that sentence. In any group of 1-4,
+  the size-skew caveat (subject at or below the 10th, or at or above the 90th,
+  percentile of its group by assets) now reads "Any comparison against this
+  group would carry a size bias; this report shows no peer median, so it makes
+  none." instead of "Comparisons against this group's median carry a size
+  bias.", which groups of 5 or more keep. The no-peer caveat now says the Peers (n)
   column reads 0, where it said every peer column is N/A.
 - **"in a an unrecorded asset window"** on the sample peer group's selection
   basis.
@@ -111,6 +113,10 @@ rows dated 2020-06-30 through 2021-12-31 (see Fixed).
   Institutions:** is unchanged.
 - The below-minimum group caveat and the size-skew caveat for groups of 1-4,
   and the no-peer caveat (see Fixed).
+- **Institution's Position in the Peer Asset Range:** in a group of 1-4 ends
+  "0 or 100 means it does not. This report shows no peer median, so it makes
+  no comparison that a size bias could distort." instead of "…, and the peer
+  median carries a size bias.", which groups of 5 or more keep.
 - The missing/malformed-date Benchmark line, `threshold_source` prefix and date
   lines (see Fixed). The 0.3.3 prefix `none applied at this report date: ` is
   unchanged for every other refused date.
