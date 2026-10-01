@@ -18,39 +18,57 @@ a metric when the metric is undefined for it (a zero denominator), when a field
 was not reported, or when this tool refused the published value; the statistic
 is computed over the peers that have one. At `20260630`, CERT 16583's group of
 19 had a value for reserve coverage at 1 peer, for NPL ratio at 4 and for
-loans-to-deposits at 7, and the page said "19 institutions" three times. 0.3.4
-prints n wherever a peer statistic appears and withholds the median,
-percentiles and vs-median line when fewer than 5 peers have a value.
+loans-to-deposits at 7, and the page gave the group count, 19, three times
+(Peer Group Size, Peer Count, Distinct Institutions). 0.3.4 prints n wherever a
+peer statistic appears and withholds the median, percentiles and vs-median line
+when fewer than 5 peers have a value.
 **No grade changes**: Status never read a peer value, and still does not.
-`summary_table()` values are unchanged on every row; it gains one column
-(11 -> 12).
+`summary_table()` keeps every numeric value on every row and gains one column
+(11 -> 12). Two text columns change wording on some rows: `threshold_source`
+when the report date is missing or malformed, and `not_graded_reason` on Tier 1
+rows dated 2020-06-30 through 2021-12-31 (see Fixed).
 
 ### Fixed
 
 - **A peer statistic with no n.** The Performance Summary has a `Peers (n)`
-  column; the Metric Detail's **Peer Median:** line and every **vs Peer
-  Median:** line state how many peers have a value for the metric.
+  column; the Metric Detail's **Peer Median:** line states how many peers have
+  a value for the metric, and every **vs Peer Median:** line ends with it in
+  square brackets, `[n = 20 peers with a value]`, after any relative figure or
+  withheld-relative reason.
 - **A median over one peer, shown as a peer median.** When fewer than 5 peers
   have a value (`0 < n < 5`), the three peer cells read `withheld` and the
   Metric Detail shows a **Peer statistics:** line stating n of the group size,
-  in place of the median and vs-median lines. 5 is this tool's own minimum
-  (HOUSE): at n <= 4 the quartiles are interpolations and the median has at
-  most one observation on each side; at n = 5 all three are actual
-  observations. Interpolation recurs above 5 (n = 6, 7, 8, 10), so 5 is not the
-  point where it stops.
+  in place of the median and vs-median lines: "only 1 of the 19 peers in this
+  group has a value for this metric", or, when every peer in the group has
+  one, "all 3 peers in this group have a value for this metric, but 3 is
+  below …" ("the group's one peer has" for a group of 1). When no peer has a
+  value the line reads "none — no peer in this group has a value for this
+  metric", and with no peer group at all "none — this report has no peer group
+  (see Peer group caveats)". 5 is this tool's own minimum (HOUSE): it is the
+  smallest n above 1 at which the median and both quartiles are all actual
+  observations rather than interpolations between two peers (at n = 2 and
+  n = 4 all three are interpolated, at n = 3 both quartiles are, and at n = 1
+  all three are the one peer's own value). Interpolation recurs above 5 (n = 6,
+  7, 8, 10), so 5 is not the point where it stops.
 - **The group count read as each statistic's n.** "Peer Group Size: N
   institutions" and "Peer Count: N" are relabelled (see Changed).
 - **A group caveat describing percentiles the page does not contain.** For a
   group smaller than the requested minimum and smaller than 5, every statistic
   is now withheld, so the caveat says that instead of "Percentiles over so few
   peers are not a reliable benchmark". A group of 5 or more below the requested
-  minimum keeps that sentence.
+  minimum keeps that sentence. In any group of 1-4, the size-skew caveat
+  (subject at or below the 10th, or at or above the 90th, percentile of its
+  group by assets) now reads "Any comparison against this group would carry a
+  size bias; this report withholds every peer median, so it makes none."
+  instead of "Comparisons against this group's median carry a size bias.",
+  which groups of 5 or more keep. The no-peer caveat now says the Peers (n)
+  column reads 0, where it said every peer column is N/A.
 - **"in a an unrecorded asset window"** on the sample peer group's selection
   basis.
 - **"none applied at this report date" when there is no usable report date.**
   For a missing or malformed REPDTE the Tier 1 Benchmark line and the
-  `threshold_source` prefix read "none applied — this report has no usable
-  report date", and **Report Date:** / **Call Report Period:** read `not
+  `threshold_source` prefix read "none applied, because this report has no
+  usable report date", and **Report Date:** / **Call Report Period:** read `not
   stated` (missing) or the raw value in quotes (malformed), instead of `None`,
   a blank or `N/A`. Classified with the CBLR schedule's own test, so `"  "` is
   missing and `"nan"` is malformed on every line. Other refused dates keep "at
@@ -66,15 +84,17 @@ percentiles and vs-median line when fewer than 5 peers have a value.
   value.
 - `report_withholds_peer_stats` column in `summary_table()`: on a row with
   `0 < peer_count < 5`, the sentence saying the rendered report withholds that
-  row's peer median, percentiles and vs-median, and that the row's values are
-  computed over those few peers; `None` on every other row. Built as an
+  row's peer median, percentiles and vs-median, and that the row's
+  `peer_median`, `peer_25th`, `peer_75th` and `vs_median` are computed over
+  those few peers; `None` on every other row. Built as an
   object-dtype Series like `not_graded_reason`, so `None` stays `None` under
   pandas 3. `__all__` is unchanged (21 names).
 - `BenchmarkResult.report_withholds_peer_stats`, the same sentence as a
   property.
 - `BenchmarkResult.peer_group_size`, an optional trailing field (default
   `None`) that `benchmark_institution` sets to the number of institutions in
-  the peer group. The property above reads it to say "n of N"; a result
+  the peer group. The property above reads it to say "n of N" ("all n peers
+  in the group", or "the group's one peer", when n equals N); a result
   constructed without it omits "of N". It is not a `summary_table()` column.
 - A **Thin peer cell:** line in Metric Detail when 5 <= n < 10 (10 is this
   tool's house minimum for a peer group, `HOUSE_MIN_PEERS`, not the caller's
@@ -83,10 +103,14 @@ percentiles and vs-median line when fewer than 5 peers have a value.
 ### Changed
 
 - **Peer Group Size:** reads `N institutions selected — each metric's peer
-  statistics use only the peers with a value for that metric; see Peers (n)`.
+  statistics use only the peers with a value for that metric; see Peers (n)`
+  (`1 institution selected` for a group of 1). For an empty group it reads
+  `0 institutions selected`, with no clause.
 - **Peer Count:** in the Peer Group Summary is now **Institutions Selected:**,
-  with the same clause. **Distinct Institutions:** is unchanged.
-- The below-minimum group caveat for groups of 1-4 (see Fixed).
+  with the same clause, again omitted for an empty group. **Distinct
+  Institutions:** is unchanged.
+- The below-minimum group caveat and the size-skew caveat for groups of 1-4,
+  and the no-peer caveat (see Fixed).
 - The missing/malformed-date Benchmark line, `threshold_source` prefix and date
   lines (see Fixed). The 0.3.3 prefix `none applied at this report date: ` is
   unchanged for every other refused date.
@@ -116,12 +140,15 @@ percentiles and vs-median line when fewer than 5 peers have a value.
    as for FDIC-insured banks. At `20260630`, 66 such filers were in the peer
    universe of 4,313 and appeared in 1,610 subjects' peer groups; for CERT
    16583 they are 12 of 19 peers. They have no loans or deposits, so they drop
-   out of loans-to-deposits, NPL ratio and reserve coverage (which is why those
-   show n = 7, 4, 1), but they are counted in the peer n and statistics of
+   out of loans-to-deposits, NPL ratio and reserve coverage (for CERT 16583
+   they are the 12 that loans-to-deposits loses; NPL ratio also loses 3 insured
+   peers with no loans, and reserve coverage 3 lenders with no noncurrent loans,
+   giving n = 7, 4 and 1), but they are counted in the peer n and statistics of
    ROAA, ROAE, NIM, efficiency ratio and Tier 1. 0.3.4 does not change peer
    selection.
-2. `rank_institution`'s `peer_count` is per-metric on success, but the group
-   size on its two refusal paths (institution value missing; banded metric).
+2. `rank_institution`'s `peer_count` is per-metric on success and when no
+   peer has a value (0), but the group size on its other two refusal paths
+   (institution value missing; banded metric).
    It is not rendered on the report.
 3. `summary_table()` annotates and does not withhold: its peer median,
    percentiles and `vs_median` stay numeric on a row the rendered report

@@ -117,10 +117,19 @@ def test_every_peer_statistic_carries_its_n(name, subject, peers):
                 f"(n = {n} peers with a value for this metric)"), block
             for vs in (ln for ln in block.splitlines()
                        if ln.startswith("**vs Peer Median:**")):
-                assert vs.endswith(f" (vs a median of {n} peers with a value)"), vs
+                assert vs.endswith(f" [n = {n} peers with a value]"), vs
+        elif n == len(peers):
+            who = ("the group's one peer has" if n == 1
+                   else f"all {n} peers in this group have")
+            assert (f"**Peer statistics:** withheld — {who} a value for this "
+                    f"metric, but {n} is below this tool's house minimum of "
+                    f"{PEER_STAT_MIN_N} for showing a median or "
+                    f"percentiles.") in block, block
+            assert f"only {n} of the {n}" not in block, block
         elif n > 0:
             assert (f"**Peer statistics:** withheld — only {n} of the "
-                    f"{len(peers)} peers in this group have a value for this "
+                    f"{len(peers)} peers in this group "
+                    f"{'has' if n == 1 else 'have'} a value for this "
                     f"metric") in block, block
         checked += 1
     assert checked == len(BENCHMARKS)
@@ -187,7 +196,8 @@ def test_below_the_floor_every_peer_statistic_is_withheld(n):
         == ["withheld"] * 3, row
     assert row["Peers (n)"] == str(n)
     assert (f"**Peer statistics:** withheld — only {n} of the 20 peers in this "
-            f"group have a value for this metric, below this tool's house "
+            f"group {'has' if n == 1 else 'have'} a value for this metric, "
+            f"below this tool's house "
             f"minimum of {PEER_STAT_MIN_N} for showing a median or "
             f"percentiles. A peer has no value when the metric is undefined "
             f"for it (a zero denominator, e.g. reserve coverage at a bank with "
@@ -239,7 +249,8 @@ def test_the_group_count_is_qualified_everywhere_it_is_printed(name, subject, pe
     clause = ("— each metric's peer statistics use only the peers with a value "
               "for that metric; see Peers (n)")
     n = len(peers)
-    assert f"**Peer Group Size:** {n} institutions selected {clause}" in report
+    assert (f"**Peer Group Size:** {n} institution{'' if n == 1 else 's'} "
+            f"selected {clause}") in report
     assert f"**Institutions Selected:** {n} {clause}" in report
     assert f"\n**Distinct Institutions:** {len({p.cert for p in peers})}\n" in report
 
@@ -251,7 +262,7 @@ def test_the_readme_has_no_vs_median_example_without_its_n():
     lines = [ln for ln in text.splitlines() if "**vs Peer Median:**" in ln]
     assert lines, "the README lost its vs-median example"
     for ln in lines:
-        assert re.search(r"\(vs a median of \d+ peers? with a value\)\s*$", ln), ln
+        assert re.search(r"\[n = \d+ peers? with a value\]\s*$", ln), ln
 
 
 # ── G-P4: n = 0 ──────────────────────────────────────────────────────────────
@@ -274,7 +285,9 @@ def test_an_empty_group_never_reads_only_zero():
     subject = _bank(1, 7)
     report = generate_report(subject, _group([], subject))
     assert "only 0" not in report
-    assert report.count("no peer in this group has a value") == len(BENCHMARKS)
+    assert report.count("**Peer statistics:** none — this report has no peer "
+                        "group (see Peer group caveats).") == len(BENCHMARKS)
+    assert "no peer in this group has a value" not in report
 
 
 # ── G-P5: the two constants are read, not retyped ────────────────────────────
@@ -347,13 +360,15 @@ def test_the_dataframe_and_the_page_state_the_same_n_of_n():
                      ("Non-Performing Loan Ratio", 4)):
         reason = df.loc[df["metric"] == label,
                         "report_withholds_peer_stats"].iloc[0]
+        verb = "has" if n == 1 else "have"
+        over = "that 1 peer" if n == 1 else f"those {n} peers"
         assert reason == (
             f"The rendered report withholds this row's peer median, "
-            f"percentiles and vs-median: only {n} of the 19 peers have a value "
-            f"for this metric, below this tool's house minimum of "
-            f"{PEER_STAT_MIN_N}. The values in this row are computed over "
-            f"those {n} peer{'s' if n != 1 else ''}.")
-        assert f"only {n} of the 19 peers in this group have a value" \
+            f"percentiles and vs-median: only {n} of the 19 peers {verb} a "
+            f"value for this metric, below this tool's house minimum of "
+            f"{PEER_STAT_MIN_N}. This row's peer_median, peer_25th, peer_75th "
+            f"and vs_median are computed over {over}.")
+        assert f"only {n} of the 19 peers in this group {verb} a value" \
             in _block(report, label)
     for label in ("Loans-to-Deposits", "Efficiency Ratio"):
         assert df.loc[df["metric"] == label,
@@ -445,3 +460,51 @@ def test_a_group_at_the_floor_keeps_the_0_3_3_caveat():
     assert f"Peer group has {PEER_STAT_MIN_N} institutions, below the requested " \
            f"minimum of {HOUSE_MIN_PEERS}. Percentiles over so few peers" in joined
     assert "withheld" not in joined
+
+
+# ── fix round 1 (2026-09-30): F1 grammar, N3, N10 ────────────────────────────
+@pytest.mark.parametrize("N,n", [(1, 1), (3, 3), (19, 1)])
+def test_the_n_of_n_lines_are_grammatical(N, n):
+    """F1: no "1 institutions", "1 of the 1 peers", "1 of the 19 ... have",
+    "those 1 peer" or "only N of the N", on the page or in the DataFrame."""
+    subject, peers = _reserve_n(n, size=N)
+    report = generate_report(subject, peers)
+    df = summary_table(subject, peers)
+    text = report + "\n" + "\n".join(
+        v for v in df["report_withholds_peer_stats"] if v is not None)
+    assert " 1 institutions" not in text
+    assert "1 of the 1 peers" not in text
+    assert "only 1 of the 19 peers in this group have" not in text
+    assert "those 1 peer" not in text
+    assert f"only {N} of the {N}" not in text
+    reserve = df.loc[df["metric"] == "Loan Loss Reserve Coverage",
+                     "report_withholds_peer_stats"].iloc[0]
+    assert reserve is not None and reserve.endswith(
+        "that 1 peer." if n == 1 else f"those {n} peers.")
+
+
+def test_no_below_minimum_caveat_when_the_caller_minimum_is_met_below_the_floor():
+    """N3: P8's caveat is for a group below the CALLER's minimum, not merely
+    below PEER_STAT_MIN_N (mutation X1)."""
+    subject, peers = _uniform(3, min_peers=3)
+    assert "below the requested minimum" not in " ".join(peers.caveats)
+
+
+@pytest.mark.parametrize("k", [1, 3, PEER_STAT_MIN_N, 7])
+def test_the_size_skew_caveat_names_only_comparisons_the_page_makes(k):
+    """N10: below PEER_STAT_MIN_N every peer median is withheld, so the
+    size-skew caveat must not speak of comparisons against it."""
+    subject, peers = _uniform(k)
+    assert peers.asset_percentile == 100.0
+    joined = " ".join(peers.caveats)
+    lead = ("The subject is at the 100th percentile of its own peer group by "
+            "assets: nearly every peer is SMALLER than the institution. ")
+    if k < PEER_STAT_MIN_N:
+        assert (lead + "Any comparison against this group would carry a size "
+                "bias; this report withholds every peer median, so it makes "
+                "none.") in joined, joined
+        assert "Comparisons against this group's median" not in joined
+    else:
+        assert (lead + "Comparisons against this group's median carry a size "
+                "bias.") in joined, joined
+        assert "makes none" not in joined

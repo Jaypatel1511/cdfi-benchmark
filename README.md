@@ -131,7 +131,7 @@ carries the same sentence beside the table.
 A metric's distance from its peer median is reported twice on the same line,
 because the two numbers mean different things and one alone is misleading:
 
-    **vs Peer Median:** 0.85 pp below median (72.6% below) (vs a median of 20 peers with a value)
+    **vs Peer Median:** 0.85 pp below median (72.6% below) [n = 20 peers with a value]
 
 `0.85 pp` is the arithmetic difference of the two percentages printed directly
 above it — percentage POINTS. `72.6%` is that gap as a share of the peer
@@ -146,11 +146,12 @@ the Performance Summary's **Peers (n)** column.
 
 The relative figure is withheld, with the reason stated inline, whenever the
 peer median is not positive **at the precision the page prints**, and the whole
-comparison is withheld when fewer than 5 peers have a value — the median, both
-percentiles and this line are replaced by a **Peer statistics:** line stating
-n (5 is this tool's own minimum, HOUSE). For a withheld relative figure, the
-reason given is the one true of that case, not a single sentence covering all
-three:
+comparison is withheld when fewer than 5 peers have a value: the Metric Detail's
+median and vs-median lines are replaced by a **Peer statistics:** line stating n
+of the group size, and the table's three peer cells read `withheld` (5 is this
+tool's own minimum, HOUSE; when no peer has a value the line says so instead).
+For a withheld relative figure, the reason given is the one true of that case,
+not a single sentence covering all three:
 
 * **negative median** — a percentage of it carries the opposite sign to the
   direction stated beside it, so the same line would say "above" and "below" at
@@ -419,10 +420,10 @@ names the two failing gates.
 
 ## Who This Is For
 
-- CDFI banks and MDIs benchmarking against peers (**FDIC-insured banks only** —
-  credit unions are NCUA-regulated and are not covered by this API or this tool
-  — peer groups may include uninsured non-deposit trust companies filing call
-  reports; see CHANGELOG.md, [0.3.4], Known limitations)
+- CDFI banks and MDIs benchmarking against peers (**FDIC-insured banks only**;
+  credit unions are NCUA-regulated and are not covered by this API or this
+  tool. Peer groups may include uninsured non-deposit trust companies filing
+  call reports; see CHANGELOG.md, [0.3.4], Known limitations.)
 - MDI management teams preparing board reports
 - CDFI Fund analysts reviewing institution performance
 - Impact investors evaluating CDFI bank investments

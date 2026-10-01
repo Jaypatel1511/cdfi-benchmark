@@ -49,14 +49,22 @@ def _peer_stats_withheld(n) -> bool:
 def _peer_stats_withheld_line(n, group_size) -> str:
     """The Metric Detail line that replaces the peer median when n < floor."""
     if n == 0:
-        head = ("**Peer statistics:** none — no peer in this group has a "
-                "value for this metric.")
-    else:
-        head = (f"**Peer statistics:** withheld — only {n} of the {group_size} "
-                f"peers in this group have a value for this metric, below this "
-                f"tool's house minimum of {PEER_STAT_MIN_N} for showing a "
-                f"median or percentiles.")
-    return f"{head} {_NO_VALUE_REASONS}"
+        if group_size == 0:
+            return ("**Peer statistics:** none — this report has no peer "
+                    "group (see Peer group caveats).")
+        return ("**Peer statistics:** none — no peer in this group has a "
+                f"value for this metric. {_NO_VALUE_REASONS}")
+    if n == group_size:
+        who = ("the group's one peer has" if n == 1
+               else f"all {n} peers in this group have")
+        return (f"**Peer statistics:** withheld — {who} a value for this "
+                f"metric, but {n} is below this tool's house minimum of "
+                f"{PEER_STAT_MIN_N} for showing a median or percentiles.")
+    verb = "has" if n == 1 else "have"
+    return (f"**Peer statistics:** withheld — only {n} of the {group_size} "
+            f"peers in this group {verb} a value for this metric, below this "
+            f"tool's house minimum of {PEER_STAT_MIN_N} for showing a median "
+            f"or percentiles. {_NO_VALUE_REASONS}")
 
 
 def _thin_cell_line(n, group_size):
@@ -237,7 +245,7 @@ def _vs_median_line(vs_printed, peer_median_raw, n) -> str:
     the pp gap that `_VS_LINE` parses.
     """
     return (f"{_vs_median_body(vs_printed, peer_median_raw)} "
-            f"(vs a median of {n} {_peers_word(n)} with a value)")
+            f"[n = {n} {_peers_word(n)} with a value]")
 
 
 def _vs_median_body(vs_printed, peer_median_raw) -> str:
@@ -342,7 +350,7 @@ def _threshold_line(metric: str, report_date: str = None) -> str:
     benchmark = benchmark_for(metric, report_date)
     if benchmark.get("refusal"):
         # MISSING / MALFORMED: there is no "this report date" to point at.
-        where = ("none applied — this report has no usable report date"
+        where = ("none applied, because this report has no usable report date"
                  if _unusable_report_date(report_date)
                  else "none applied at this report date")
         return (f"**Benchmark:** {where} — no CBLR "
@@ -541,8 +549,9 @@ def generate_report(
         f"**Total Assets:** {_fmt_assets_mm(institution.total_assets_mm)}",
         _asset_bucket_line(institution),
         f"**Report Date:** {_report_date_text(institution.report_date)}",
-        f"**Peer Group Size:** {len(peers)} institutions selected"
-        f"{_GROUP_SIZE_CLAUSE}",
+        f"**Peer Group Size:** {len(peers)} "
+        f"institution{'' if len(peers) == 1 else 's'} selected"
+        f"{_GROUP_SIZE_CLAUSE if len(peers) else ''}",
         _peer_period_line(peers),
         "",
     ]
@@ -675,7 +684,7 @@ def generate_report(
     ]
 
     peer_df = compute_peer_metrics(peers)
-    lines.append(f"**Institutions Selected:** {len(peers)}{_GROUP_SIZE_CLAUSE}")
+    lines.append(f"**Institutions Selected:** {len(peers)}{_GROUP_SIZE_CLAUSE if len(peers) else ''}")
     if "total_assets_mm" in peer_df.columns:
         lines.append(
             f"**Peer Asset Range:** "

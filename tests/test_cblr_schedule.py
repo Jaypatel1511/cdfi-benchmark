@@ -223,8 +223,9 @@ def test_a_refused_date_is_not_graded_anywhere(d, reason):
 def test_a_date_with_no_usable_value_is_not_graded_anywhere(d, reason):
     """N6. The MISSING and MALFORMED half of the 0.3.3 test above."""
     report = _check_refused_everywhere(
-        d, reason, "none applied — this report has no usable report date: ",
-        "none applied — this report has no usable report date")
+        d, reason,
+        "none applied, because this report has no usable report date: ",
+        "none applied, because this report has no usable report date")
     assert "none applied at this report date" not in report
     shown = "not stated" if reason == MISSING else f'"{d}"'
     assert f"**Report Date:** {shown}\n" in report, report[:800]

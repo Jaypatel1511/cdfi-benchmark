@@ -206,9 +206,10 @@ class PeerGroup(list):
             out.append(
                 f"NO peer met the selection criteria at "
                 f"{self.target_report_date or 'the requested period'}, so this "
-                f"is not a peer comparison. Every peer column, percentile and "
-                f"vs-median figure in this report is N/A, and no benchmarking "
-                f"has been performed. Any Status shown grades the institution's "
+                f"is not a peer comparison. Every peer median, percentile and "
+                f"vs-median figure in this report is N/A, the Peers (n) column "
+                f"reads 0, and no benchmarking has been performed. Any Status "
+                f"shown grades the institution's "
                 f"own values against fixed thresholds only. Check that the "
                 f"report date is a quarter-end on which institutions filed."
             )
@@ -250,11 +251,20 @@ class PeerGroup(list):
         pct = self.asset_percentile
         if pct is not None and (pct <= 10 or pct >= 90):
             side = "LARGER" if pct <= 10 else "SMALLER"
+            # Below PEER_STAT_MIN_N the report withholds every peer median, so
+            # "comparisons against this group's median" would describe
+            # comparisons the page does not contain (0.3.4).
+            if len(self) < PEER_STAT_MIN_N:
+                bias = ("Any comparison against this group would carry a size "
+                        "bias; this report withholds every peer median, so it "
+                        "makes none.")
+            else:
+                bias = ("Comparisons against this group's median carry a size "
+                        "bias.")
             out.append(
                 f"The subject is at the {pct:g}th percentile of its own peer "
                 f"group by assets: nearly every peer is {side} than the "
-                f"institution. Comparisons against this group's median carry a "
-                f"size bias."
+                f"institution. {bias}"
             )
         # A field the parse layer refused (see fdic._coerce_float) is dropped
         # from that metric's median by `dropna()`, silently, exactly like a value

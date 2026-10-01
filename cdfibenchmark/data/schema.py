@@ -143,11 +143,13 @@ HOUSE_RESERVE_COVERAGE_WARNING = 50
 # whose ratio is undefined (a zero denominator), unreported or refused has no
 # value, and measured at 20260630 CERT 16583's 19-peer group left reserve
 # coverage with ONE such peer -- the page printed its 60.24% as "Peer Median"
-# beside "Peer Count: 19". Why 5: at n <= 4 the quartiles are interpolations
-# and the median has at most one observation on each side; at n = 5 all three
-# are actual observations. Interpolation recurs above 5 (n = 6, 7, 8, 10), so 5
-# is not the point where it stops. A house judgment, disclosed as one; not in
-# `__all__`.
+# beside "Peer Count: 19". Why 5: 5 is this tool's own minimum (HOUSE): it is
+# the smallest n above 1 at which the median and both quartiles are all actual
+# observations rather than interpolations between two peers (at n = 2 and n = 4
+# all three are interpolated, at n = 3 both quartiles are, and at n = 1 all
+# three are the one peer's own value). Interpolation recurs above 5 (n = 6, 7,
+# 8, 10), so 5 is not the point where it stops. A house judgment, disclosed as
+# one; not in `__all__`.
 PEER_STAT_MIN_N = 5
 
 # The CBLR qualifying leverage level, BY THE PERIOD IT IS IN FORCE FOR.
@@ -340,7 +342,7 @@ _REFUSED_SOURCE_PREFIX = "none applied at this report date: "
 
 #: The same prefix when there IS no usable report date (MISSING / MALFORMED):
 #: "at this report date" points at a date the report does not have (0.3.4).
-_NO_DATE_SOURCE_PREFIX = "none applied — this report has no usable report date: "
+_NO_DATE_SOURCE_PREFIX = "none applied, because this report has no usable report date: "
 
 
 def _unusable_report_date(report_date):
@@ -462,8 +464,8 @@ def benchmark_for(metric: str, report_date: str = None) -> dict:
     ``good_exclusive=True`` (every attested row is a "greater than" row). A
     refused date gets ``good=None, warning=None``, a `refusal` reason, and a
     `source` that is that reason behind the prefix "none applied at this report
-    date: " -- or, when the date is MISSING or MALFORMED, "none applied — this
-    report has no usable report date: " (0.3.4) -- see `_cblr_at`.
+    date: " -- or, when the date is MISSING or MALFORMED, "none applied,
+    because this report has no usable report date: " (0.3.4) -- see `_cblr_at`.
 
     This is the single place that answers "which threshold applies", so a grade
     and the Benchmark line rendered beside it cannot disagree about it.
@@ -1051,15 +1053,23 @@ class BenchmarkResult:
         n = self.peer_count
         if not n or n >= PEER_STAT_MIN_N:
             return None
-        if self.peer_group_size is not None:
-            have = f"only {n} of the {self.peer_group_size} peers have"
+        N = self.peer_group_size
+        if N is not None and n == N:
+            head = (("the group's one peer has" if n == 1
+                     else f"all {n} peers in the group have")
+                    + f" a value for this metric, but {n} is below")
+        elif N is not None:
+            head = (f"only {n} of the {N} peers {'has' if n == 1 else 'have'} "
+                    f"a value for this metric, below")
         else:
-            have = f"only {n} peer{'s have' if n != 1 else ' has'}"
+            head = (f"only {n} peer{' has' if n == 1 else 's have'} a value "
+                    f"for this metric, below")
+        over = "that 1 peer" if n == 1 else f"those {n} peers"
         return (
             f"The rendered report withholds this row's peer median, "
-            f"percentiles and vs-median: {have} a value for this metric, "
-            f"below this tool's house minimum of {PEER_STAT_MIN_N}. The values "
-            f"in this row are computed over those {n} peer{'s' if n != 1 else ''}."
+            f"percentiles and vs-median: {head} this tool's house minimum of "
+            f"{PEER_STAT_MIN_N}. This row's peer_median, peer_25th, peer_75th "
+            f"and vs_median are computed over {over}."
         )
 
     @property

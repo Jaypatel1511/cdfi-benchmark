@@ -284,6 +284,7 @@ def test_the_zero_peer_caveat_reaches_the_rendered_page():
                                              target_report_date="20260515"))
     assert "not a peer comparison" in report
     assert "Percentiles over so few peers" not in report
+    assert "Every peer column" not in report
 
 
 def test_a_small_but_nonzero_group_still_gets_the_small_n_caveat():
