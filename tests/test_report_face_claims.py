@@ -108,10 +108,13 @@ def test_the_printed_vs_median_is_the_difference_of_the_printed_operands():
     # The unit moved from `%` to `pp` in 0.3.2 (see the F1 block below); a tie
     # renders "— at the median" rather than picking a direction. This gate is
     # about the ARITHMETIC, so it reads whichever shape the line takes.
+    # 0.3.4 (P1): the Peer Median line ends with its n; accepted, not required,
+    # so this gate still parses only the operands it checks.
     detail = {label: (amount, above or below or at)
               for label, amount, above, below, at in re.findall(
         r"### (.+?)\n\n\*\*Institution Value:\*\* (?:-?[\d.]+)%\n"
-        r"\*\*Peer Median:\*\* (?:-?[\d.]+)%\n"
+        r"\*\*Peer Median:\*\* (?:-?[\d.]+)%"
+        r"(?: \(n = \d+ peers? with a value for this metric\))?\n"
         r"\*\*vs Peer Median:\*\* (-?[\d.]+) pp "
         r"(?:(above) median|(below) median|— (at) the median)", report)}
     assert detail, "no vs-median lines were parsed out of the report"

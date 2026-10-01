@@ -425,3 +425,23 @@ def test_the_sample_selection_basis_has_one_article():
     assert "a an" not in basis
     _, peers = _uniform(20)
     assert "in a +/-50% asset window" in peers.selection_basis
+
+
+# ── the floor's boundary on the two surfaces outside the page ────────────────
+# Added after supplementary mutations M2b / M2c (`<` -> `<=` in the property
+# and in the P8 caveat) stayed green against every gate above.
+def test_the_dataframe_annotates_only_below_the_floor():
+    for n, withheld in ((PEER_STAT_MIN_N - 1, True), (PEER_STAT_MIN_N, False)):
+        subject, peers = _reserve_n(n)
+        df = summary_table(subject, peers)
+        v = df.loc[df["metric"] == "Loan Loss Reserve Coverage",
+                   "report_withholds_peer_stats"].iloc[0]
+        assert (v is not None) is withheld, (n, v)
+
+
+def test_a_group_at_the_floor_keeps_the_0_3_3_caveat():
+    subject, peers = _uniform(PEER_STAT_MIN_N)
+    joined = " ".join(peers.caveats)
+    assert f"Peer group has {PEER_STAT_MIN_N} institutions, below the requested " \
+           f"minimum of {HOUSE_MIN_PEERS}. Percentiles over so few peers" in joined
+    assert "withheld" not in joined
