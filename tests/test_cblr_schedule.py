@@ -88,7 +88,9 @@ def RELIEF(d):
         f"which this version of cdfi-benchmark does not encode. No CBLR "
         f"qualifying level is applied at {_iso(d)} and this value is not "
         f"graded. The PCA leverage leg is withheld too, so that a partial grade "
-        f"is not read as a full one. See CHANGELOG.md, section [0.3.3]."
+        f"is not read as a full one. See CHANGELOG.md, section [0.3.3], at "
+        f"https://github.com/Jaypatel1511/cdfi-benchmark/blob/v0.3.3/"
+        f"CHANGELOG.md."
     )
 
 
@@ -174,14 +176,20 @@ def _result(value, repdte, basis=BASIS_FDIC_LEVERAGE, metric="tier1_ratio"):
     )
 
 
-@pytest.mark.parametrize("d,reason", REFUSED, ids=[_rid(d) for d, _ in REFUSED])
-def test_a_refused_date_is_not_graded_anywhere(d, reason):
+#: 0.3.4 (methodology N6): MISSING and MALFORMED have no report date to say
+#: "at this report date" about. The 0.3.3 test below is SPLIT by class: the
+#: same body runs for every refused date, with the class's own wording.
+_NO_DATE = [(d, r) for d, r in REFUSED if r in (MISSING, MALFORMED(d))]
+_DATED = [(d, r) for d, r in REFUSED if (d, r) not in _NO_DATE]
+
+
+def _check_refused_everywhere(d, reason, prefix, where):
     level, text = _cblr_at(d)
     assert level is None and text == reason, (d, text)
     cfg = benchmark_for("tier1_ratio", d)
     assert cfg["good"] is None and cfg["warning"] is None, cfg
     assert cfg["refusal"] == reason
-    assert cfg["source"].startswith("none applied at this report date: "), cfg
+    assert cfg["source"] == prefix + reason, cfg
     # 3.0 and 6.0 prove the PCA leg is withheld too, not just the CBLR leg.
     for value in (3.0, 6.0, 8.2, 14.99):
         r = _result(value, d)
@@ -190,13 +198,37 @@ def test_a_refused_date_is_not_graded_anywhere(d, reason):
     report, block, row = _render(d, 8.2)
     assert "**Institution Value:** 8.20%" in block, block
     bench = [ln for ln in block.splitlines() if ln.startswith("**Benchmark:**")]
-    assert len(bench) == 1 and "none applied at this report date" in bench[0] \
+    assert len(bench) == 1 and where in bench[0] \
         and "12 CFR" in bench[0], block
     assert f"**Not graded:** {reason}" in block, block
     assert block.count("**Not graded:**") == 1, block
     assert "Strong >" not in block and "Strong >=" not in block, block
     assert row["not_graded_reason"] == reason
     assert row["status"] == "N/A"
+    assert row["threshold_source"] == prefix + reason
+    return report
+
+
+@pytest.mark.parametrize("d,reason", _DATED, ids=[_rid(d) for d, _ in _DATED])
+def test_a_refused_date_is_not_graded_anywhere(d, reason):
+    report = _check_refused_everywhere(
+        d, reason, "none applied at this report date: ",
+        "none applied at this report date")
+    assert "no usable report date" not in report
+    assert f"**Report Date:** {d}\n" in report
+    assert f"**Call Report Period:** {d} — " in report
+
+
+@pytest.mark.parametrize("d,reason", _NO_DATE, ids=[_rid(d) for d, _ in _NO_DATE])
+def test_a_date_with_no_usable_value_is_not_graded_anywhere(d, reason):
+    """N6. The MISSING and MALFORMED half of the 0.3.3 test above."""
+    report = _check_refused_everywhere(
+        d, reason, "none applied — this report has no usable report date: ",
+        "none applied — this report has no usable report date")
+    assert "none applied at this report date" not in report
+    shown = "not stated" if reason == MISSING else f'"{d}"'
+    assert f"**Report Date:** {shown}\n" in report, report[:800]
+    assert f"**Call Report Period:** {shown} — " in report
 
 
 @pytest.mark.parametrize("d", [None, "", "None", "  "], ids=_rid)

@@ -54,6 +54,21 @@ def _summary_rows(report):
     ]
 
 
+def _cells_by_header(report, row):
+    """A summary row's cells keyed by the header row's labels.
+
+    0.3.4 (methodology E2a): P1 inserted `Peers (n)` before Status, which moved
+    Status from cells[5] to cells[6]. Indexing by label means the next column
+    added cannot silently point a check at the wrong cell.
+    """
+    header = next(ln for ln in report.splitlines()
+                  if ln.startswith("| Metric |"))
+    labels = [c.strip() for c in header.strip().strip("|").split("|")]
+    cells = [c.strip() for c in row.strip().strip("|").split("|")]
+    assert len(labels) == len(cells), (labels, cells)
+    return dict(zip(labels, cells))
+
+
 def test_nan_cored_report_has_no_nan_substring(nan_cored_institution, sample_peers):
     """A NaN-cored institution must never leak 'nan'/'$nanMM' into the report."""
     report = generate_report(nan_cored_institution, sample_peers)
@@ -78,10 +93,8 @@ def test_nan_cored_value_cell_renders_na_consistent_with_status(
     report = generate_report(nan_cored_institution, sample_peers)
     roaa_rows = [r for r in _summary_rows(report) if "ROAA" in r]
     assert roaa_rows, "ROAA row missing from summary table"
-    row = roaa_rows[0]
-    cells = [c.strip() for c in row.strip("|").split("|")]
-    # cells: label | institution | median | p25 | p75 | status
-    inst_cell, status_cell = cells[1], cells[5]
+    cells = _cells_by_header(report, roaa_rows[0])
+    inst_cell, status_cell = cells["Institution"], cells["Status"]
     assert inst_cell == "N/A", f"expected N/A institution cell, got {inst_cell!r}"
     # value N/A must be consistent with an N/A status (—), not graded
     assert status_cell == "—", f"value N/A but status graded: {status_cell!r}"
@@ -94,8 +107,8 @@ def test_present_zero_renders_as_zero_not_na_and_is_graded(
     report = generate_report(present_zero_cored_institution, sample_peers)
     roaa_rows = [r for r in _summary_rows(report) if "ROAA" in r]
     assert roaa_rows, "ROAA row missing from summary table"
-    cells = [c.strip() for c in roaa_rows[0].strip("|").split("|")]
-    inst_cell, status_cell = cells[1], cells[5]
+    cells = _cells_by_header(report, roaa_rows[0])
+    inst_cell, status_cell = cells["Institution"], cells["Status"]
     assert inst_cell == "0.00%", f"present zero erased: got {inst_cell!r}"
     # roaa 0.0 < warning 0.5 → graded WEAK; value and status must agree (graded)
     assert status_cell != "—", "present zero rendered a value but was not graded"

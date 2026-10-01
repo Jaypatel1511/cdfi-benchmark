@@ -284,11 +284,33 @@ def test_the_zero_peer_caveat_reaches_the_rendered_page():
 
 
 def test_a_small_but_nonzero_group_still_gets_the_small_n_caveat():
-    """The n=0 branch must not swallow the case it was split off from."""
+    """The n=0 branch must not swallow the case it was split off from.
+
+    0.3.4 (methodology E2b): at 3 peers every statistic is withheld, so the
+    caveat is P8's sentence, not "Percentiles over so few peers", which would
+    describe percentiles the page does not contain. The 0.3.3 sentence is
+    asserted at 7 peers below.
+    """
     subject = _bank(16584, 111_233.0)
     peers = _group([_bank(9000 + i, 111_000.0) for i in range(3)], subject)
     joined = " ".join(peers.caveats)
-    assert "Percentiles over so few peers" in joined
+    assert ("Peer group has 3 institutions, below the requested minimum of "
+            "10; every peer median and percentile in this report is withheld "
+            "(this tool's house minimum for showing them is 5).") in joined
+    assert "Percentiles over so few peers" not in joined
+    assert "NO peer met the selection criteria" not in joined
+
+
+def test_a_group_of_seven_below_the_minimum_keeps_the_small_n_caveat():
+    """E2b's second half: at PEER_STAT_MIN_N <= n < min_peers the statistics
+    are shown, so the 0.3.3 sentence is still true and still rendered."""
+    subject = _bank(16584, 111_233.0)
+    peers = _group([_bank(9000 + i, 111_000.0) for i in range(7)], subject)
+    joined = " ".join(peers.caveats)
+    assert ("Peer group has 7 institutions, below the requested minimum of "
+            "10. Percentiles over so few peers are not a reliable "
+            "benchmark.") in joined
+    assert "withheld" not in joined
     assert "NO peer met the selection criteria" not in joined
 
 
@@ -515,6 +537,14 @@ def test_a_value_at_the_printed_median_is_not_called_below_it():
 
 #: (REPDTE, negative-median cells, zero-median cells, rounds-to-zero cells).
 #: Filer universe sizes: 4,313 / 4,353 / 4,411 / 4,452 / 4,494 / 4,536.
+#:
+#: 0.3.4: these count TRIGGERS -- cells where the median takes each case at
+#: any n -- not RENDERED lines. Since 0.3.4 a cell with fewer than
+#: PEER_STAT_MIN_N peers with a value renders the withheld line instead, so
+#: some of these never reach the page. Under floor 5 the cells with n >= 5,
+#: as (negative, zero, rounds-to-zero), are 20260630 (0, 2, 0), 20260331
+#: (2, 1, 0) and 20250331 (0, 3, 7) (methodology v2.1 section 2.1, from the
+#: v1.1 audit's sweep; not re-measured here), so all three cases stay live.
 RELATIVE_GAP_REACH = (
     ("20260630", 0, 3, 0),
     ("20260331", 10, 4, 0),
@@ -589,11 +619,19 @@ def _detail_block(report, heading):
 #: specimen. Its 19-bank peer group holds four banks with an NPL ratio at all;
 #: three report zero non-current loans, so the median is exactly 0.00%.
 #: (CERT, NCLNLS $k, LNLSGR $k) as FDIC published them.
+#:
+#: 0.3.4 (methodology N7): four peers with a value is below PEER_STAT_MIN_N, so
+#: the real four-bank cell now renders the withheld line and never reaches
+#: `_relative_gap_reason`. To keep RENDER coverage of the zero-median reason,
+#: a FIFTH, SYNTHETIC peer is added (CERT 99916 is not an FDIC-issued CERT; it
+#: was not measured). It reports zero non-current loans, so the median of the
+#: five is still exactly 0.00%. The first four rows are unchanged and real.
 ZERO_MEDIAN_PEERS = (
     (29966, 83.0, 6226.0),
     (13986, 0.0, 2241.0),
     (17982, 0.0, 3053.0),
     (17138, 0.0, 9755.0),
+    (99916, 0.0, 4000.0),   # SYNTHETIC, 0.3.4: lifts n to PEER_STAT_MIN_N
 )
 #: CERT 16583's own NCLNLS / LNLSGR at that period -> 2.53%.
 ZERO_MEDIAN_SUBJECT = (16583, 173.0, 6834.0)
@@ -627,8 +665,15 @@ ROUNDS_TO_ZERO_SUBJECT = (9349, 39.0, 23320.0)
 #: ROE for its four peers; the median is -0.50%. This is the one case the 0.3.2
 #: sentence was right about, kept as a real specimen rather than the synthetic
 #: -700% efficiency ratio the gate used before.
+#:
+#: 0.3.4 (methodology N7): the four real peers are below PEER_STAT_MIN_N, so a
+#: FIFTH, SYNTHETIC peer is added at exactly the four's median (CERT 99917 is
+#: not an FDIC-issued CERT; it was not measured). The median of the five is
+#: still -0.50%, so the subject is still 0.63 pp above and the -126% relative
+#: figure is still the one that must not render.
 NEGATIVE_MEDIAN_PEER_ROE = ((57834, -0.27), (28722, -201.12),
-                            (57150, -0.73), (34331, 3.14))
+                            (57150, -0.73), (34331, 3.14),
+                            (99917, -0.50))   # SYNTHETIC, 0.3.4
 #: CERT 34065's own published ROE at that period.
 NEGATIVE_MEDIAN_SUBJECT_ROE = (34065, 0.13)
 
