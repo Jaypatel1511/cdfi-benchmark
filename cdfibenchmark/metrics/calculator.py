@@ -82,6 +82,9 @@ def benchmark_institution(
             basis=institution.metric_basis(metric),
             source=config.get("source"),
             report_date=institution.report_date,
+            # The GROUP size, so a result can say "n of N". `peer_count` above
+            # is the per-metric n and is the only count any statistic uses.
+            peer_group_size=len(peers),
         ))
 
     return results

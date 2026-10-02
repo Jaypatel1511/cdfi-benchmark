@@ -73,6 +73,15 @@ def test_report_discloses_an_undersized_peer_group(q1_institution):
         peers = build_peer_group(q1_institution, min_peers=10)
     report = generate_report(q1_institution, peers)
     assert "below the requested minimum" in report
+    # 0.3.4 (G-P10): at 3 peers every statistic is withheld, so no sentence
+    # on the page may assert that percentiles are present.
+    assert "Percentiles over so few peers" not in report
+    assert ("Peer group has 3 institutions, below the requested minimum of "
+            "10; this report shows no peer median or percentile for any metric "
+            "(this tool's house minimum for showing them is 5 peers with a "
+            "value for that metric).") in report
+    assert "**Peer Median:**" not in report
+    assert "**vs Peer Median:**" not in report
 
 
 def test_report_discloses_a_mixed_period_peer_group(q1_institution):

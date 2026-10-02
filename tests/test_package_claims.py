@@ -698,7 +698,7 @@ def test_the_declared_build_requirement_can_read_this_metadata():
 @layout.needs("pyproject.toml")
 def test_version_is_bumped_for_a_release_that_changes_grades():
     meta = _project_meta()
-    assert meta["version"] == "0.3.3"
+    assert meta["version"] == "0.3.4"
 
 
 @layout.needs("pyproject.toml", "CHANGELOG.md")

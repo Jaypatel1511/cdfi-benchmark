@@ -1,7 +1,10 @@
 """
 Peer group selection logic for CDFI benchmarking.
 """
-from cdfibenchmark.data.schema import InstitutionProfile, ASSET_BUCKETS, _is_missing
+from cdfibenchmark.data.schema import (
+    InstitutionProfile, ASSET_BUCKETS, _is_missing, PEER_STAT_MIN_N, BENCHMARKS,
+)
+from cdfibenchmark.metrics.calculator import compute_peer_metrics
 from cdfibenchmark.data.fdic import get_peer_financials, FDIC_MAX_LIMIT
 from cdfibenchmark.exceptions import FDICResponseError
 
@@ -135,7 +138,9 @@ class PeerGroup(list):
         it is: a bound on the candidate pool.
         """
         tol = self.asset_tolerance
-        tol_txt = f"+/-{tol * 100:.0f}%" if tol is not None else "an unrecorded"
+        # The article lives in `tol_txt` (0.3.4): the sentence below hard-coded
+        # "in a {tol_txt}", which read "in a an unrecorded" on the sample path.
+        tol_txt = f"a +/-{tol * 100:.0f}%" if tol is not None else "an unrecorded"
         universe = (f"{self.universe_size:,}" if self.universe_size is not None
                     else "an unrecorded number of")
         span = self.asset_span
@@ -151,7 +156,7 @@ class PeerGroup(list):
         return (
             f"the {len(self)} banks NEAREST the subject in total assets. "
             f"{breadth}"
-            f"They were selected from a candidate pool of {universe} banks in a "
+            f"They were selected from a candidate pool of {universe} banks in "
             f"{tol_txt} asset window at "
             f"{self.target_report_date or 'an unpinned period'}; that window "
             f"bounds the pool, and for most subjects it is wide enough that it "
@@ -180,6 +185,26 @@ class PeerGroup(list):
         return len(self) < self.min_peers
 
     @property
+    def _shows_no_peer_median(self) -> bool:
+        """True when the report on this group shows no peer median at all.
+
+        That is, no metric has PEER_STAT_MIN_N peers with a value: the same
+        per-metric count `benchmark_institution` takes as `peer_count`, so this
+        agrees with `generator._shows_no_peer_median` on the rendered results
+        (0.3.4). True for every group of 1-4, and for a larger group in which
+        every metric is thin.
+        """
+        df = compute_peer_metrics(self)
+        for metric in BENCHMARKS:
+            if metric not in df.columns:
+                continue
+            values = df[metric].dropna()
+            if (len(values) >= PEER_STAT_MIN_N
+                    and not _is_missing(float(values.median()))):
+                return False
+        return True
+
+    @property
     def caveats(self) -> list:
         """Human-readable statements of every way this group is not ideal.
 
@@ -202,11 +227,27 @@ class PeerGroup(list):
             out.append(
                 f"NO peer met the selection criteria at "
                 f"{self.target_report_date or 'the requested period'}, so this "
-                f"is not a peer comparison. Every peer column, percentile and "
-                f"vs-median figure in this report is N/A, and no benchmarking "
-                f"has been performed. Any Status shown grades the institution's "
+                f"is not a peer comparison. Every peer median, percentile and "
+                f"vs-median figure in this report is N/A, the Peers (n) column "
+                f"reads 0, and no benchmarking has been performed. Any Status "
+                f"shown grades the institution's "
                 f"own values against fixed thresholds only. Check that the "
                 f"report date is a quarter-end on which institutions filed."
+            )
+        elif self.below_min_peers and self._shows_no_peer_median:
+            # No metric has PEER_STAT_MIN_N peers with a value -- always so
+            # below PEER_STAT_MIN_N (n <= group size), and possible above it --
+            # so the report shows no median or percentile. "Percentiles over
+            # so few peers are not a reliable benchmark" would describe
+            # percentiles the document does not contain -- the n=0 defect
+            # above, one step up (0.3.4).
+            n = len(self)
+            out.append(
+                f"Peer group has {n} institution{'s' if n != 1 else ''}, below "
+                f"the requested minimum of {self.min_peers}; this report shows "
+                f"no peer median or percentile for any metric (this tool's house "
+                f"minimum for showing them is {PEER_STAT_MIN_N} peers with a "
+                f"value for that metric)."
             )
         elif self.below_min_peers:
             out.append(
@@ -233,11 +274,21 @@ class PeerGroup(list):
         pct = self.asset_percentile
         if pct is not None and (pct <= 10 or pct >= 90):
             side = "LARGER" if pct <= 10 else "SMALLER"
+            # When the report shows no peer median (every group of 1-4, and
+            # any larger group in which every metric is thin), "comparisons
+            # against this group's median" would describe comparisons the
+            # page does not contain (0.3.4).
+            if self._shows_no_peer_median:
+                bias = ("Any comparison against this group would carry a size "
+                        "bias; this report shows no peer median, so it makes "
+                        "none.")
+            else:
+                bias = ("Comparisons against this group's median carry a size "
+                        "bias.")
             out.append(
                 f"The subject is at the {pct:g}th percentile of its own peer "
                 f"group by assets: nearly every peer is {side} than the "
-                f"institution. Comparisons against this group's median carry a "
-                f"size bias."
+                f"institution. {bias}"
             )
         # A field the parse layer refused (see fdic._coerce_float) is dropped
         # from that metric's median by `dropna()`, silently, exactly like a value
@@ -253,11 +304,16 @@ class PeerGroup(list):
                 f"{name} on {n} peer{'s' if n != 1 else ''}"
                 for name, n in sorted(refused.items())
             )
+            if self._shows_no_peer_median:
+                where = ("Those peers count as having no value for that "
+                         "metric (see Peers (n)).")
+            else:
+                where = ("Those peers are excluded from that metric's median "
+                         "and percentiles.")
             out.append(
                 f"FDIC published a value for {detail} that fell outside this "
                 f"tool's plausibility bound for a percentage and was refused. "
-                f"Those peers are excluded from that metric's median and "
-                f"percentiles. A refusal is this tool's judgement, not FDIC's: "
+                f"{where} A refusal is this tool's judgement, not FDIC's: "
                 f"the published values were real filings."
             )
         if self.window_truncated:
