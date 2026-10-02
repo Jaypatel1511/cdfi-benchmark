@@ -195,9 +195,14 @@ class PeerGroup(list):
         every metric is thin.
         """
         df = compute_peer_metrics(self)
-        return not any(metric in df.columns
-                       and df[metric].notna().sum() >= PEER_STAT_MIN_N
-                       for metric in BENCHMARKS)
+        for metric in BENCHMARKS:
+            if metric not in df.columns:
+                continue
+            values = df[metric].dropna()
+            if (len(values) >= PEER_STAT_MIN_N
+                    and not _is_missing(float(values.median()))):
+                return False
+        return True
 
     @property
     def caveats(self) -> list:
@@ -240,8 +245,9 @@ class PeerGroup(list):
             out.append(
                 f"Peer group has {n} institution{'s' if n != 1 else ''}, below "
                 f"the requested minimum of {self.min_peers}; this report shows "
-                f"no peer median or percentile (this tool's house minimum for "
-                f"showing them is {PEER_STAT_MIN_N})."
+                f"no peer median or percentile for any metric (this tool's house "
+                f"minimum for showing them is {PEER_STAT_MIN_N} peers with a "
+                f"value for that metric)."
             )
         elif self.below_min_peers:
             out.append(
@@ -298,11 +304,16 @@ class PeerGroup(list):
                 f"{name} on {n} peer{'s' if n != 1 else ''}"
                 for name, n in sorted(refused.items())
             )
+            if self._shows_no_peer_median:
+                where = ("Those peers count as having no value for that "
+                         "metric (see Peers (n)).")
+            else:
+                where = ("Those peers are excluded from that metric's median "
+                         "and percentiles.")
             out.append(
                 f"FDIC published a value for {detail} that fell outside this "
                 f"tool's plausibility bound for a percentage and was refused. "
-                f"Those peers are excluded from that metric's median and "
-                f"percentiles. A refusal is this tool's judgement, not FDIC's: "
+                f"{where} A refusal is this tool's judgement, not FDIC's: "
                 f"the published values were real filings."
             )
         if self.window_truncated:

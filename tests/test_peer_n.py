@@ -418,8 +418,9 @@ def test_a_group_below_the_floor_says_every_statistic_is_withheld(k):
     word = "institution" if k == 1 else "institutions"
     assert (f"Peer group has {k} {word}, below the requested minimum of "
             f"{HOUSE_MIN_PEERS}; this report shows no peer median or "
-            f"percentile (this tool's house minimum for showing them is "
-            f"{PEER_STAT_MIN_N}).") in report
+            f"percentile for any metric (this tool's house minimum for showing "
+            f"them is {PEER_STAT_MIN_N} peers with a value for that "
+            f"metric).") in report
     assert "Percentiles over so few peers" not in report
     assert "**Peer Median:**" not in report
     for row in _summary_cells(report).values():
@@ -550,7 +551,11 @@ def test_a_metric_no_peer_has_is_not_called_withheld_in_either_caveat():
     p8 = [c for c in caveats if "below the requested minimum" in c]
     n10 = [c for c in caveats if "percentile of its own peer group" in c]
     assert len(p8) == 1 and len(n10) == 1, caveats
-    assert "this report shows no peer median or percentile" in p8[0]
+    assert p8[0] == (
+        f"Peer group has 3 institutions, below the requested minimum of "
+        f"{HOUSE_MIN_PEERS}; this report shows no peer median or percentile "
+        f"for any metric (this tool's house minimum for showing them is "
+        f"{PEER_STAT_MIN_N} peers with a value for that metric).")
     assert "this report shows no peer median, so it makes none." in n10[0]
     for caveat in p8 + n10:
         assert "withheld" not in caveat, caveat
@@ -584,8 +589,8 @@ _STATUS_HEAD = (
     "the fixed thresholds shown on each metric's **Benchmark** line below. It "
     "does **not** consult the Peer Median, 25th or 75th percentile columns.")
 _STATUS_NO_MEDIAN = _STATUS_HEAD + (
-    " This page shows no peer median or percentile, so it answers only the "
-    "grade question.")
+    " This page shows no peer median or percentile for any metric, so it "
+    "answers only the grade question.")
 _STATUS_WITH_MEDIAN = _STATUS_HEAD + (
     " A metric can grade STRONG while sitting below the peer median, and "
     "ADEQUATE while sitting outside the peer range entirely. Read the grade "
@@ -650,8 +655,9 @@ def test_an_all_thin_group_below_the_minimum_gets_the_no_median_caveat():
     report = generate_report(subject, peers)
     assert (f"Peer group has 7 institutions, below the requested minimum of "
             f"{HOUSE_MIN_PEERS}; this report shows no peer median or "
-            f"percentile (this tool's house minimum for showing them is "
-            f"{PEER_STAT_MIN_N}).") in report
+            f"percentile for any metric (this tool's house minimum for showing "
+            f"them is {PEER_STAT_MIN_N} peers with a value for that "
+            f"metric).") in report
     assert "Percentiles over so few peers" not in report
 
 
@@ -672,7 +678,8 @@ _NO_MEDIAN_PAGE_FORBIDDEN = (
     "answers both", "sitting below the peer median", "carries a size bias",
     "Comparisons against this group's median", "Percentiles over so few peers",
     "read the median and percentiles as indicative", "**vs Peer Median:**",
-    "**Peer Median:**",
+    "**Peer Median:**", "no peer median or percentile,",
+    "no peer median or percentile (",
 )
 
 
@@ -695,3 +702,60 @@ def test_a_no_median_page_presupposes_no_median(name, subject, peers):
     if no_median:
         for phrase in _NO_MEDIAN_PAGE_FORBIDDEN:
             assert phrase not in report, (name, phrase)
+
+
+# ── fix round 4 (2026-10-01): N1, N2 ─────────────────────────────────────────
+_REFUSED = dict(tier1_ratio=float("nan"), implausible_fields=("RBC1AAJ",))
+_REFUSED_NO_MEDIAN = (
+    "FDIC published a value for RBC1AAJ on 2 peers that fell outside this "
+    "tool's plausibility bound for a percentage and was refused. Those peers "
+    "count as having no value for that metric (see Peers (n)). A refusal is "
+    "this tool's judgement, not FDIC's: the published values were real "
+    "filings.")
+_REFUSED_WITH_MEDIAN = (
+    "FDIC published a value for RBC1AAJ on 2 peers that fell outside this "
+    "tool's plausibility bound for a percentage and was refused. Those peers "
+    "are excluded from that metric's median and percentiles. A refusal is "
+    "this tool's judgement, not FDIC's: the published values were real "
+    "filings.")
+
+
+def test_the_refused_field_caveat_presupposes_no_median_on_a_no_median_page():
+    """N1: an all-thin group of 7 shows no peer median, so the refused-field
+    caveat must not say the refused peers are excluded from one."""
+    subject, thin = _all_thin(7)
+    peers = _group([_bank(p.cert, i, **_REFUSED) if i < 2 else p
+                    for i, p in enumerate(thin)], subject)
+    report = generate_report(subject, peers)
+    assert "**Peer Median:**" not in report
+    assert _REFUSED_NO_MEDIAN in peers.caveats
+    assert _REFUSED_NO_MEDIAN in report
+    assert "excluded from that metric's median" not in report
+
+
+def test_the_refused_field_caveat_keeps_its_sentence_on_a_median_page():
+    """N1: `_uniform(7)` with the same refusals shows a peer median, so the
+    caveat keeps the 0.3.3 sentence."""
+    subject = _bank(1, 7)
+    peers = _group([_bank(9000 + i, i, **(_REFUSED if i < 2 else {}))
+                    for i in range(7)], subject)
+    report = generate_report(subject, peers)
+    assert "**Peer Median:**" in report
+    assert _REFUSED_WITH_MEDIAN in peers.caveats
+    assert _REFUSED_WITH_MEDIAN in report
+    assert "count as having no value for that metric" not in report
+
+
+@pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+def test_the_two_no_median_tests_agree_when_a_median_is_not_a_number():
+    inf = float("inf")
+    subject = _bank(1, 30)
+    peers = _group([_bank(9000 + i, i, **dict(_NO_VALUE, tier1_ratio=v))
+                    for i, v in enumerate([inf] * 3 + [-inf] * 3)], subject)
+    report = generate_report(subject, peers)
+    assert "**Peer Median:**" not in report
+    assert peers._shows_no_peer_median is True
+    assert generator._shows_no_peer_median(
+        benchmark_institution(subject, peers)) is True
+    assert "Comparisons against this group's median" not in report
+    assert "Percentiles over so few peers" not in report

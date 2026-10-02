@@ -21,7 +21,8 @@ is computed over the peers that have one. At `20260630`, CERT 16583's group of
 loans-to-deposits at 7, and the page gave the group count, 19, three times (Peer
 Group Size, Peer Count, Distinct Institutions). 0.3.4 prints n wherever a peer
 statistic appears and withholds the median, percentiles and vs-median line when
-1 to 4 peers have a value (with no peer value they read N/A).
+1 to 4 peers have a value (with no peer value the median and percentiles read
+N/A and there is no vs-median line).
 **No grade changes**: Status never read a peer value, and still does not.
 `summary_table()` keeps every numeric value on every row and gains one column
 (11 -> 12). Two text columns change wording on some rows: `threshold_source`
@@ -54,17 +55,20 @@ rows dated 2020-06-30 through 2021-12-31 (see Fixed).
   institutions" and "Peer Count: N" are relabelled (see Changed).
 - **A group caveat describing percentiles the page does not contain.** For a
   group smaller than the requested minimum and smaller than 5, the page shows
-  no peer median or percentile (each is withheld, or N/A where no peer has a
-  value), so the caveat now reads "…; this report shows no peer median or
-  percentile (this tool's house minimum for showing them is 5)." instead of
-  "Percentiles over so few peers are not a reliable benchmark". A group of 5 or
-  more below the requested minimum keeps that sentence. In any group of 1-4,
-  the size-skew caveat (subject at or below the 10th, or at or above the 90th,
-  percentile of its group by assets) now reads "Any comparison against this
-  group would carry a size bias; this report shows no peer median, so it makes
-  none." instead of "Comparisons against this group's median carry a size
-  bias.", which groups of 5 or more keep. The no-peer caveat now says the
-  Peers (n) column reads 0, where it said every peer column is N/A.
+  no peer median or percentile for any metric (each is withheld, or N/A where
+  no peer has a value), so the caveat now reads "…; this report shows no peer
+  median or percentile for any metric (this tool's house minimum for showing
+  them is 5 peers with a value for that metric)." instead of "Percentiles over
+  so few peers are not a reliable benchmark". A group of 5 or more below the
+  requested minimum keeps that sentence unless every metric has fewer than 5
+  peers with a value (see Changed). In any group of 1-4, the size-skew caveat
+  (subject at or below the 10th, or at or above the 90th, percentile of its
+  group by assets) now reads "Any comparison against this group would carry a
+  size bias; this report shows no peer median, so it makes none." instead of
+  "Comparisons against this group's median carry a size bias.", which groups
+  of 5 or more keep unless every metric has fewer than 5 peers with a value
+  (see Changed). The no-peer caveat now says the Peers (n) column reads 0,
+  where it said every peer column is N/A.
 - **"in a an unrecorded asset window"** on the sample peer group's selection
   basis.
 - **"none applied at this report date" when there is no usable report date.**
@@ -116,26 +120,30 @@ rows dated 2020-06-30 through 2021-12-31 (see Fixed).
 - **Institution's Position in the Peer Asset Range:** in a group of 1-4 ends
   "0 or 100 means it does not. This report shows no peer median, so it makes
   no comparison that a size bias could distort." instead of "…, and the peer
-  median carries a size bias.", which groups of 5 or more keep.
+  median carries a size bias.", which groups of 5 or more keep unless every
+  metric has fewer than 5 peers with a value (see below).
 - **How to read Status:** on a page that shows no peer median (every metric
   has fewer than 5 peers with a value: every group of 1-4, and a larger group
   whose metrics are all thin), the note keeps its first two sentences and then
-  reads "This page shows no peer median or percentile, so it answers only the
-  grade question." instead of "A metric can grade STRONG while sitting below
-  the peer median, … — this report answers both and combines neither." Every
-  other page is unchanged.
+  reads "This page shows no peer median or percentile for any metric, so it
+  answers only the grade question." instead of "A metric can grade STRONG
+  while sitting below the peer median, … — this report answers both and
+  combines neither." Every other page is unchanged.
 - The Position line's "This report shows no peer median, …" ending is keyed on
   the page, not the group size: a group of 5 or more in which every metric has
   fewer than 5 peers with a value also gets it, instead of "…, and the peer
   median carries a size bias."
 - The below-minimum caveat "…; this report shows no peer median or percentile
-  …" also applies to a group of 5 or more below the requested minimum in which
-  every metric has fewer than 5 peers with a value, instead of "Percentiles
-  over so few peers are not a reliable benchmark".
+  for any metric …" also applies to a group of 5 or more below the requested
+  minimum in which every metric has fewer than 5 peers with a value, instead of
+  "Percentiles over so few peers are not a reliable benchmark".
 - The size-skew caveat's "Any comparison against this group would carry a size
   bias; this report shows no peer median, so it makes none." also applies to a
   group of 5 or more in which every metric has fewer than 5 peers with a value,
   instead of "Comparisons against this group's median carry a size bias."
+- On a page that shows no peer median, the refused-field caveat says "Those
+  peers count as having no value for that metric (see Peers (n))." instead of
+  "Those peers are excluded from that metric's median and percentiles."
 - The missing/malformed-date Benchmark line, `threshold_source` prefix and date
   lines (see Fixed). The 0.3.3 prefix `none applied at this report date: ` is
   unchanged for every other refused date.

@@ -299,8 +299,9 @@ def test_a_small_but_nonzero_group_still_gets_the_small_n_caveat():
     peers = _group([_bank(9000 + i, 111_000.0) for i in range(3)], subject)
     joined = " ".join(peers.caveats)
     assert ("Peer group has 3 institutions, below the requested minimum of "
-            "10; this report shows no peer median or percentile (this tool's "
-            "house minimum for showing them is 5).") in joined
+            "10; this report shows no peer median or percentile for any metric "
+            "(this tool's house minimum for showing them is 5 peers with a "
+            "value for that metric).") in joined
     assert "Percentiles over so few peers" not in joined
     assert "NO peer met the selection criteria" not in joined
 

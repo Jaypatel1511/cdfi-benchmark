@@ -124,7 +124,9 @@ above. **It does not read the peer median or the percentiles**, which are
 reported alongside it and answer a different question. A metric can grade STRONG
 while sitting below the peer median, and ADEQUATE while sitting entirely outside
 the peer range — both happen on real banks at `20260630`. The rendered report
-carries the same sentence beside the table.
+carries the same sentence beside the table whenever it shows a peer median; a
+report that shows none (every metric has fewer than 5 peers with a value) says
+instead that it answers only the grade question.
 
 ### Comparisons to the peer median are stated in BOTH units
 
@@ -149,9 +151,9 @@ peer median is not positive **at the precision the page prints**, and the whole
 comparison is withheld when fewer than 5 peers have a value: the Metric Detail's
 median and vs-median lines are replaced by a **Peer statistics:** line stating n
 of the group size, and the table's three peer cells read `withheld` (5 is this
-tool's own minimum, HOUSE; when no peer has a value the line says so instead).
-For a withheld relative figure, the reason given is the one true of that case,
-not a single sentence covering all three:
+tool's own minimum, HOUSE; when no peer has a value the line says so instead,
+and the three cells read N/A). For a withheld relative figure, the reason given
+is the one true of that case, not a single sentence covering all three:
 
 * **negative median** — a percentage of it carries the opposite sign to the
   direction stated beside it, so the same line would say "above" and "below" at

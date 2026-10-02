@@ -627,8 +627,8 @@ def generate_report(
     # On a page with no peer median, "sitting below the peer median" points at
     # a median the page lacks and "this report answers both" is false (0.3.4).
     if no_median:
-        status_note += (" This page shows no peer median or percentile, so it "
-                        "answers only the grade question.")
+        status_note += (" This page shows no peer median or percentile for any "
+                        "metric, so it answers only the grade question.")
     else:
         status_note += (
             " A metric can grade STRONG while sitting below the peer median, "
